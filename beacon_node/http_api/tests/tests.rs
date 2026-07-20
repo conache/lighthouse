@@ -9786,10 +9786,10 @@ async fn get_validator_payload_attestation_data_pre_gloas() {
         .await;
 }
 
-// TODO(heze): add tests for:
+// TODO(heze): add IL fetching tests for:
 // - happy-path
 // - bad-slot
-// - EL-failure
+// - EL call failure
 //
 // The above tests should be added once the harness supports building a Heze chain.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
