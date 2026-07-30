@@ -48,6 +48,7 @@ mod tests;
 /// The interval (in seconds) that various network metrics will update.
 const METRIC_UPDATE_INTERVAL: u64 = 5;
 /// Number of slots before the fork when we should subscribe to the new fork topics.
+#[allow(dead_code)]
 const SUBSCRIBE_DELAY_SLOTS: u64 = 2;
 /// Delay after a fork where we unsubscribe from pre-fork topics.
 const UNSUBSCRIBE_DELAY_EPOCHS: u64 = 2;
@@ -408,7 +409,7 @@ impl<T: BeaconChainTypes> NetworkService<T> {
         let mut result = vec![fork_context.context_bytes(current_epoch)];
 
         if let Some(next_digest_epoch) = spec.next_digest_epoch(current_epoch)
-            && current_slot.saturating_add(Slot::new(SUBSCRIBE_DELAY_SLOTS))
+            && current_slot.saturating_add(Slot::new(T::EthSpec::slots_per_epoch()))
                 >= next_digest_epoch.start_slot(T::EthSpec::slots_per_epoch())
         {
             let next_digest = fork_context.context_bytes(next_digest_epoch);
@@ -942,7 +943,7 @@ fn next_topic_subscriptions_delay<T: BeaconChainTypes>(
 ) -> Option<tokio::time::Sleep> {
     if let Some((_, duration_to_epoch)) = beacon_chain.duration_to_next_digest() {
         let duration_to_subscription = duration_to_epoch.saturating_sub(Duration::from_secs(
-            beacon_chain.spec.get_slot_duration().as_secs() * SUBSCRIBE_DELAY_SLOTS,
+            beacon_chain.spec.get_slot_duration().as_secs() * T::EthSpec::slots_per_epoch(),
         ));
         if !duration_to_subscription.is_zero() {
             return Some(tokio::time::sleep(duration_to_subscription));

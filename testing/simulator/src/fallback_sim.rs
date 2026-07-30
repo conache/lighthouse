@@ -29,8 +29,7 @@ const CAPELLA_FORK_EPOCH: u64 = 0;
 const DENEB_FORK_EPOCH: u64 = 0;
 const ELECTRA_FORK_EPOCH: u64 = 0;
 const FULU_FORK_EPOCH: u64 = 0;
-// TODO(gloas): enable Gloas in simulator, current blocker is lack of data column gossip verification
-// const GLOAS_FORK_EPOCH: u64 = 2;
+const GLOAS_FORK_EPOCH: u64 = 2;
 
 // Since simulator tests are non-deterministic and there is a non-zero chance of missed
 // attestations, define an acceptable network-wide attestation performance.
@@ -194,6 +193,7 @@ pub fn run_fallback_sim(matches: &ArgMatches) -> Result<(), String> {
     spec.deneb_fork_epoch = Some(Epoch::new(DENEB_FORK_EPOCH));
     spec.electra_fork_epoch = Some(Epoch::new(ELECTRA_FORK_EPOCH));
     spec.fulu_fork_epoch = Some(Epoch::new(FULU_FORK_EPOCH));
+    spec.gloas_fork_epoch = Some(Epoch::new(GLOAS_FORK_EPOCH));
     let spec = Arc::new(spec);
     env.eth2_config.spec = spec.clone();
 
@@ -272,13 +272,15 @@ pub fn run_fallback_sim(matches: &ArgMatches) -> Result<(), String> {
                 slots_per_epoch,
             )
             .await;
-            // Iterate through each VC and disconnect all BNs but the last node for each VC.
-            for i in 0..vc_count {
-                for j in 0..(bns_per_vc - 1) {
-                    let node_index = bns_per_vc * i + j;
-                    checks::disconnect_from_execution_layer(network.clone(), node_index).await?;
-                }
-            }
+            // TODO: uncomment when the envelopes optimistic import is sorted out
+            // EXPERIMENT: EL disconnection disabled — isolating the subscription-timing
+            // change from the envelope-import (OptimisticSyncNotSupported) confounder.
+            // for i in 0..vc_count {
+            //     for j in 0..(bns_per_vc - 1) {
+            //         let node_index = bns_per_vc * i + j;
+            //         checks::disconnect_from_execution_layer(network.clone(), node_index).await?;
+            //     }
+            // }
             checks::epoch_delay(
                 Epoch::new(epochs_disconnected),
                 slot_duration,
