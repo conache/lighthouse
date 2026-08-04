@@ -15,6 +15,7 @@ use fixed_bytes::FixedBytesExtended;
 use http_api::test_utils::InteractiveTester;
 use parking_lot::Mutex;
 use slot_clock::SlotClock;
+use ssz_types::ProgressiveVariableList;
 use state_processing::{
     per_block_processing::get_expected_withdrawals, state_advance::complete_state_advance,
 };
@@ -23,7 +24,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use types::{
     Address, Epoch, EthSpec, ExecPayload, ExecutionBlockHash, ForkName, Hash256, MainnetEthSpec,
-    MinimalEthSpec, ProposerPreparationData, Slot, Transactions,
+    MinimalEthSpec, ProgressiveTransactions, ProposerPreparationData, Slot,
 };
 
 type E = MainnetEthSpec;
@@ -1413,7 +1414,9 @@ async fn get_validator_inclusion_list() {
         .await;
 
     // Configure the IL transactions returned by the mock EL.
-    let transactions: Transactions<E> = vec![static_valid_tx::<E>().unwrap()].try_into().unwrap();
+    let transactions = ProgressiveTransactions::new(vec![ProgressiveVariableList::new(
+        static_valid_tx::<E>().unwrap().to_vec(),
+    )]);
     let mock_el = harness.mock_execution_layer.as_ref().unwrap();
     mock_el
         .server
@@ -1421,10 +1424,7 @@ async fn get_validator_inclusion_list() {
         .set_inclusion_list(transactions.clone());
 
     let slot = harness.chain.slot().unwrap();
-    let response = client
-        .get_validator_inclusion_list::<E>(slot)
-        .await
-        .unwrap();
+    let response = client.get_validator_inclusion_list(slot).await.unwrap();
     assert_eq!(response.data.transactions, transactions);
 }
 
@@ -1454,7 +1454,7 @@ async fn get_validator_inclusion_list_invalid_slot() {
     // Inclusion lists are only produced for the current slot: past and future slots are rejected.
     let current_slot = harness.chain.slot().unwrap();
     for slot in [current_slot - 1, current_slot + 1] {
-        match client.get_validator_inclusion_list::<E>(slot).await {
+        match client.get_validator_inclusion_list(slot).await {
             Ok(response) => panic!("query for slot {slot} should fail, got: {response:?}"),
             Err(e) => assert_eq!(e.status().unwrap(), 400),
         }
@@ -1491,7 +1491,7 @@ async fn get_validator_inclusion_list_el_failure() {
     mock_el.server.drop_all_blocks();
 
     let slot = harness.chain.slot().unwrap();
-    match client.get_validator_inclusion_list::<E>(slot).await {
+    match client.get_validator_inclusion_list(slot).await {
         Ok(response) => panic!("query should fail when the EL errors, got: {response:?}"),
         Err(e) => assert_eq!(e.status().unwrap(), 500),
     }
