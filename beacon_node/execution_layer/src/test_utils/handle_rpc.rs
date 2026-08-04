@@ -577,7 +577,7 @@ pub async fn handle_rpc<E: EthSpec>(
                     )
                 })?;
 
-            Ok(serde_json::to_value(JsonInclusionListV1::<E>(transactions)).unwrap())
+            Ok(serde_json::to_value(JsonInclusionListV1(transactions)).unwrap())
         }
         ENGINE_FORKCHOICE_UPDATED_V1
         | ENGINE_FORKCHOICE_UPDATED_V2
@@ -784,8 +784,25 @@ pub async fn handle_rpc<E: EthSpec>(
                 match maybe_payload {
                     Some(payload) => {
                         let payload_body: ExecutionPayloadBodyV1<E> = ExecutionPayloadBodyV1 {
-                            transactions: payload.transactions().clone(),
-                            withdrawals: payload.withdrawals().ok().cloned(),
+                            transactions: payload
+                                .transactions()
+                                .iter()
+                                .map(|tx| {
+                                    types::Transaction::<E::MaxBytesPerTransaction>::new(
+                                        tx.to_vec(),
+                                    )
+                                })
+                                .collect::<Result<Vec<_>, _>>()
+                                .and_then(ssz_types::VariableList::new)
+                                .unwrap(),
+                            withdrawals: payload
+                                .withdrawals()
+                                .ok()
+                                .map(|withdrawals| {
+                                    ssz_types::VariableList::new(withdrawals.to_vec())
+                                })
+                                .transpose()
+                                .unwrap(),
                         };
                         let json_payload_body: JsonExecutionPayloadBodyV1<E> =
                             payload_body.try_into().unwrap();
@@ -819,8 +836,25 @@ pub async fn handle_rpc<E: EthSpec>(
                 match maybe_payload {
                     Some(payload) => {
                         let payload_body: ExecutionPayloadBodyV1<E> = ExecutionPayloadBodyV1 {
-                            transactions: payload.transactions().clone(),
-                            withdrawals: payload.withdrawals().ok().cloned(),
+                            transactions: payload
+                                .transactions()
+                                .iter()
+                                .map(|tx| {
+                                    types::Transaction::<E::MaxBytesPerTransaction>::new(
+                                        tx.to_vec(),
+                                    )
+                                })
+                                .collect::<Result<Vec<_>, _>>()
+                                .and_then(ssz_types::VariableList::new)
+                                .unwrap(),
+                            withdrawals: payload
+                                .withdrawals()
+                                .ok()
+                                .map(|withdrawals| {
+                                    ssz_types::VariableList::new(withdrawals.to_vec())
+                                })
+                                .transpose()
+                                .unwrap(),
                         };
                         let json_payload_body: JsonExecutionPayloadBodyV1<E> =
                             payload_body.try_into().unwrap();
