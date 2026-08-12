@@ -4,13 +4,17 @@ use super::*;
 use crate::auth::Auth;
 use crate::json_structures::*;
 use lighthouse_version::{COMMIT_PREFIX, VERSION};
-use reqwest::header::CONTENT_TYPE;
+use opentelemetry::global;
+use opentelemetry_http::HeaderInjector;
+use reqwest::header::{CONTENT_TYPE, HeaderMap};
 use sensitive_url::SensitiveUrl;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 use std::collections::HashSet;
 use std::sync::LazyLock;
 use tokio::sync::Mutex;
+use tracing::Span;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use types::ProgressiveTransactions;
 
 use std::time::{Duration, Instant};
@@ -674,6 +678,14 @@ impl HttpJsonRpc {
             request = request.bearer_auth(auth.generate_token()?);
         };
 
+        // Inject the current span's trace context as a `traceparent` header.
+        let context = Span::current().context();
+        let mut headers = HeaderMap::new();
+        global::get_text_map_propagator(|propagator| {
+            propagator.inject_context(&context, &mut HeaderInjector(&mut headers))
+        });
+        request = request.headers(headers);
+
         let body: JsonResponseBody = request.send().await?.error_for_status()?.json().await?;
 
         match (body.result, body.error) {
@@ -1086,6 +1098,8 @@ impl HttpJsonRpc {
         let params = json!([JsonPayloadIdRequest::from(payload_id)]);
 
         match fork_name {
+            // TODO(heze): deliberately reusing the Gloas response containers while the Heze
+            // payload is identical to the Gloas one. Switch to the Heze types if it diverges
             ForkName::Gloas | ForkName::Heze => {
                 let response: JsonGetPayloadResponseGloas<E> = self
                     .rpc_request(

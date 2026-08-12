@@ -394,13 +394,17 @@ async fn light_client_updates_test() {
 /// switching to big-endian keys.
 #[tokio::test]
 async fn get_light_client_updates_crosses_256_period_boundary() {
-    let db_path = tempdir().unwrap();
     let spec = test_spec::<E>();
+    if spec.altair_fork_epoch.is_none() {
+        // No-op prior to Altair.
+        return;
+    }
 
     if spec.is_gloas_scheduled() {
         return;
     }
 
+    let db_path = tempdir().unwrap();
     let store = get_store_generic(&db_path, StoreConfig::default(), spec.clone());
 
     let below = 100u64;
@@ -1950,7 +1954,7 @@ async fn heze_block_production_across_boundary() {
         .build();
     let all_validators = harness.get_all_validators();
 
-    // Build a full epoch past the Heze boundary
+    // Build through the first Heze epoch, ending at the first slot of the next epoch
     let last_slot = (heze_fork_epoch + 1).start_slot(E::slots_per_epoch());
     let slots: Vec<Slot> = (1..=last_slot.as_u64()).map(Into::into).collect();
     let state = harness.get_current_state();
@@ -4564,12 +4568,16 @@ async fn schema_downgrade_to_min_version_full_node_dense_diffs() {
 
 #[tokio::test]
 async fn light_client_update_schema_v30_migration() {
-    let db_path = tempdir().unwrap();
     let spec = test_spec::<E>();
+    if spec.altair_fork_epoch.is_none() {
+        // No-op prior to Altair.
+        return;
+    }
     if spec.is_gloas_scheduled() {
         return;
     }
 
+    let db_path = tempdir().unwrap();
     let store = get_store_generic(&db_path, StoreConfig::default(), spec.clone());
 
     // Write entries directly under the OLD little-endian key encoding, bypassing
