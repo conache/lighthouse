@@ -127,6 +127,7 @@ pub struct ChainSpec {
     pub aggregate_attestation_due: Duration,
     pub sync_message_due: Duration,
     pub contribution_and_proof_due: Duration,
+    pub inclusion_list_due: Duration,
 
     /*
      * Reward and penalty quotients
@@ -960,6 +961,12 @@ impl ChainSpec {
         self.sync_message_due
     }
 
+    /// Spec: `get_inclusion_list_due_ms`.
+    /// Get the duration into a slot in which an inclusion list production duty is due.
+    pub fn get_inclusion_list_due(&self) -> Duration {
+        self.inclusion_list_due
+    }
+
     /// Calculate the duration into a slot for a given slot component
     pub fn compute_slot_component_duration(
         &self,
@@ -1037,6 +1044,9 @@ impl ChainSpec {
         self.contribution_and_proof_due = self
             .compute_slot_component_duration(self.contribution_due_bps)
             .expect("invalid chain spec: cannot compute contribution_and_proof_due");
+        self.inclusion_list_due = self
+            .compute_slot_component_duration(self.inclusion_list_due_bps)
+            .expect("invalid chain spec: cannot compute inclusion_list_due");
 
         self.attestation_subnet_prefix_bits = compute_attestation_subnet_prefix_bits(
             self.attestation_subnet_count,
@@ -1176,6 +1186,7 @@ impl ChainSpec {
             aggregate_attestation_due: Duration::from_millis(8000),
             sync_message_due: Duration::from_millis(3999),
             contribution_and_proof_due: Duration::from_millis(8000),
+            inclusion_list_due: Duration::from_millis(8000),
 
             /*
              * Reward and penalty quotients
@@ -1518,6 +1529,7 @@ impl ChainSpec {
             aggregate_attestation_due: Duration::from_millis(4000),
             sync_message_due: Duration::from_millis(1999),
             contribution_and_proof_due: Duration::from_millis(4000),
+            inclusion_list_due: Duration::from_millis(4000),
 
             // Networking Fulu
             blob_schedule: BlobSchedule::default(),
@@ -1620,6 +1632,7 @@ impl ChainSpec {
             aggregate_attestation_due: Duration::from_millis(3333),
             sync_message_due: Duration::from_millis(1666),
             contribution_and_proof_due: Duration::from_millis(3333),
+            inclusion_list_due: Duration::from_millis(3333),
 
             /*
              * Reward and penalty quotients
