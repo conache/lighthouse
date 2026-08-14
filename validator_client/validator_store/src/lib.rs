@@ -7,11 +7,12 @@ use std::future::Future;
 use std::sync::Arc;
 use types::{
     Address, Attestation, AttestationData, BlindedBeaconBlock, Epoch, EthSpec,
-    ExecutionPayloadEnvelope, Graffiti, Hash256, PayloadAttestationData, PayloadAttestationMessage,
-    ProposerPreferences, SelectionProof, SignedAggregateAndProof, SignedBlindedBeaconBlock,
-    SignedContributionAndProof, SignedExecutionPayloadEnvelope, SignedProposerPreferences,
-    SignedValidatorRegistrationData, SingleAttestation, Slot, SyncCommitteeContribution,
-    SyncCommitteeMessage, SyncSelectionProof, SyncSubnetId, ValidatorRegistrationData,
+    ExecutionPayloadEnvelope, Graffiti, Hash256, InclusionList, PayloadAttestationData,
+    PayloadAttestationMessage, ProposerPreferences, SelectionProof, SignedAggregateAndProof,
+    SignedBlindedBeaconBlock, SignedContributionAndProof, SignedExecutionPayloadEnvelope,
+    SignedInclusionList, SignedProposerPreferences, SignedValidatorRegistrationData,
+    SingleAttestation, Slot, SyncCommitteeContribution, SyncCommitteeMessage, SyncSelectionProof,
+    SyncSubnetId, ValidatorRegistrationData,
 };
 
 #[derive(Debug, PartialEq, Clone)]
@@ -217,6 +218,12 @@ pub trait ValidatorStore: Send + Sync {
     /// `ProposalData` fields include defaulting logic described in `get_fee_recipient_defaulting`,
     /// `get_gas_limit_defaulting`, and `get_builder_proposals_defaulting`.
     fn proposal_data(&self, pubkey: &PublicKeyBytes) -> Option<ProposalData>;
+
+    fn sign_inclusion_list(
+        &self,
+        validator_pubkey: PublicKeyBytes,
+        data: InclusionList,
+    ) -> impl Future<Output = Result<SignedInclusionList, Error<Self::Error>>> + Send;
 }
 
 #[derive(Debug)]
