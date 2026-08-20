@@ -1881,28 +1881,6 @@ pub async fn serve<T: BeaconChainTypes>(
             },
         );
 
-    /*
-     * beacon inclusion lists
-     */
-
-    // POST validator/inclusion_list (JSON)
-    let post_validator_inclusion_list = post_validator_inclusion_list(
-        eth_v1.clone(),
-        not_while_syncing_filter.clone(),
-        task_spawner_filter.clone(),
-        chain_filter.clone(),
-        network_tx_filter.clone(),
-    );
-
-    // POST validator/inclusion_list (SSZ)
-    let post_validator_inclusion_list_ssz = post_validator_inclusion_list_ssz(
-        eth_v1.clone(),
-        not_while_syncing_filter.clone(),
-        task_spawner_filter.clone(),
-        chain_filter.clone(),
-        network_tx_filter.clone(),
-    );
-
     // POST beacon/rewards/sync_committee/{block_id}
     let post_beacon_rewards_sync_committee = beacon_rewards_path
         .clone()
@@ -1928,6 +1906,27 @@ pub async fn serve<T: BeaconChainTypes>(
             },
         );
 
+    /*
+     * inclusion lists
+     */
+
+    // POST validator/inclusion_list (JSON)
+    let post_validator_inclusion_list = post_validator_inclusion_list(
+        eth_v1.clone(),
+        not_while_syncing_filter.clone(),
+        task_spawner_filter.clone(),
+        chain_filter.clone(),
+        network_tx_filter.clone(),
+    );
+
+    // POST validator/inclusion_list (SSZ)
+    let post_validator_inclusion_list_ssz = post_validator_inclusion_list_ssz(
+        eth_v1.clone(),
+        not_while_syncing_filter.clone(),
+        task_spawner_filter.clone(),
+        chain_filter.clone(),
+        network_tx_filter.clone(),
+    );
     /*
      * config
      */
