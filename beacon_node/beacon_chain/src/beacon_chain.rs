@@ -93,7 +93,7 @@ use crate::{
 use bls::{PublicKey, PublicKeyBytes, Signature};
 use eth2::beacon_response::ForkVersionedResponse;
 use eth2::types::{
-    EventKind, PtcDuty, SseBlobSidecar, SseBlock, SseDataColumnSidecar,
+    EventKind, InclusionListDuty, PtcDuty, SseBlobSidecar, SseBlock, SseDataColumnSidecar,
     SseExtendedPayloadAttributes, SseHead, SseHeadV2,
 };
 use execution_layer::{
@@ -1774,6 +1774,49 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                 }))
             })
             .collect::<Result<Vec<_>, _>>()?;
+
+        Ok((duties, dependent_root))
+    }
+
+    /// Get inclusion list committee duties for validators at a given epoch ([New in Heze:EIP7805]).
+    pub fn compute_inclusion_list_duties(
+        &self,
+        state: &BeaconState<T::EthSpec>,
+        epoch: Epoch,
+        validator_indices: &[u64],
+        dependent_block_root: Hash256,
+    ) -> Result<(Vec<Option<InclusionListDuty>>, Hash256), Error> {
+        let relative_epoch = RelativeEpoch::from_epoch(state.current_epoch(), epoch)
+            .map_err(Error::IncorrectStateForAttestation)?;
+
+        let dependent_root =
+            state.attester_shuffling_decision_root(dependent_block_root, relative_epoch)?;
+
+        let mut assignments: HashMap<u64, Slot> = HashMap::new();
+        for slot in epoch.slot_iter(T::EthSpec::slots_per_epoch()) {
+            let committee = state.get_inclusion_list_committee(slot)?;
+            for validator_index in &committee {
+                assignments.entry(*validator_index).or_insert(slot);
+            }
+        }
+
+        let pubkey_cache = self.validator_pubkey_cache.read();
+
+        let duties = validator_indices
+            .iter()
+            .map(|&validator_index| {
+                let Some(&pubkey) = pubkey_cache.get_pubkey_bytes(validator_index as usize) else {
+                    return None;
+                };
+                assignments
+                    .get(&validator_index)
+                    .map(|&slot| InclusionListDuty {
+                        pubkey,
+                        validator_index,
+                        slot,
+                    })
+            })
+            .collect::<Vec<_>>();
 
         Ok((duties, dependent_root))
     }
