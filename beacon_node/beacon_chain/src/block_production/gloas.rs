@@ -34,9 +34,10 @@ use types::{
     BeaconStateError, BlobsList, BuilderIndex, ChainSpec, Deposit, Eth1Data, EthSpec,
     ExecutionBlockHash, ExecutionPayloadBid, ExecutionPayloadEnvelope, ExecutionRequestsGloas,
     FullPayload, Graffiti, Hash256, IndexedAttestation, KzgProofs, PayloadAttestation,
-    ProposerSlashing, RelativeEpoch, SignedBeaconBlock, SignedBlsToExecutionChange,
-    SignedExecutionPayloadBid, SignedExecutionPayloadEnvelope, SignedProposerPreferences,
-    SignedVoluntaryExit, Slot, SyncAggregate, Uint256, Withdrawal, Withdrawals,
+    ProgressiveTransactions, ProposerSlashing, RelativeEpoch, SignedBeaconBlock,
+    SignedBlsToExecutionChange, SignedExecutionPayloadBid, SignedExecutionPayloadEnvelope,
+    SignedProposerPreferences, SignedVoluntaryExit, Slot, SyncAggregate, Uint256, Withdrawal,
+    Withdrawals,
 };
 
 use builder_client::BidRequestContext;
@@ -1333,6 +1334,12 @@ where
         .get_proposer_gas_limit(proposer_index)
         .await
         .unwrap_or(DEFAULT_GAS_LIMIT);
+    let inclusion_list_transactions = if fork.heze_enabled() {
+        // TODO(heze): populate from the inclusion list store
+        Some(ProgressiveTransactions::empty())
+    } else {
+        None
+    };
 
     let payload_attributes = PayloadAttributes::new(
         timestamp,
@@ -1342,6 +1349,7 @@ where
         Some(parent_beacon_block_root),
         slot_number,
         Some(target_gas_limit),
+        inclusion_list_transactions,
     );
     let payload_parameters = PayloadParameters {
         parent_hash: parent_block_hash,
