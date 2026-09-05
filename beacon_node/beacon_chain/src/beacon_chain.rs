@@ -1978,8 +1978,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     /// ## Errors
     ///
     /// May return an error if the `request_slot` is too far behind the head state.
-    #[instrument(name = "lh_produce_unaggregated_attestation", skip_all, fields(%request_slot, %request_index
-    ), level = "debug")]
+    #[instrument(name = "lh_produce_unaggregated_attestation", skip_all, fields(%request_slot, %request_index), level = "debug")]
     pub fn produce_unaggregated_attestation(
         &self,
         request_slot: Slot,
@@ -6758,11 +6757,12 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
 
             let inclusion_list_transactions = if prepare_slot_fork.heze_enabled() {
                 let chain = self.clone();
-                let transactions = self.spawn_blocking_handle(
-                    move || chain.proposer_inclusion_list_transactions(head_root, current_slot),
-                    "prepare_beacon_proposer_inclusion_list_transactions",
-                )
-                .await?;
+                let transactions = self
+                    .spawn_blocking_handle(
+                        move || chain.proposer_inclusion_list_transactions(head_root, current_slot),
+                        "prepare_beacon_proposer_inclusion_list_transactions",
+                    )
+                    .await?;
                 Some(transactions)
             } else {
                 None
