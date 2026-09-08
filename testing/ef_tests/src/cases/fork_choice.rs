@@ -116,6 +116,7 @@ impl From<PayloadStatus> for PayloadStatusV1 {
             status: status.status.into(),
             latest_valid_hash: status.latest_valid_hash,
             validation_error: status.validation_error,
+            inclusion_list_satisfied: None,
         }
     }
 }
@@ -421,10 +422,18 @@ impl<E: EthSpec> Case for ForkChoiceTest<E> {
         // introduced in Fulu makes this consistent with the specification from Fulu onward.
         // See: https://github.com/ethereum/consensus-specs/pull/5547
         const IGNORED_PRE_FULU_CASES: &[&str] = &["epoch_boundary"];
+        // TODO(gloas): Remove once the EF test vectors include the fix from
+        // https://github.com/ethereum/consensus-specs/pull/5594.
+        const IGNORED_STALE_GLOAS_CASES: &[&str] = &[
+            "new_validator_deposit_with_multiple_epoch_transitions",
+            "on_block_parent_full_accepts_verified_payload",
+        ];
 
         if IGNORED_FAST_CONFIRMATION_CASES.contains(&self.description.as_str())
             || (!fork_name.fulu_enabled()
                 && IGNORED_PRE_FULU_CASES.contains(&self.description.as_str()))
+            || (fork_name == ForkName::Gloas
+                && IGNORED_STALE_GLOAS_CASES.contains(&self.description.as_str()))
         {
             return Err(Error::SkippedKnownFailure);
         }
@@ -923,6 +932,7 @@ impl<E: EthSpec> Tester<E> {
                 &mut state,
                 Some(parent_state_root),
                 block.slot(),
+                None,
                 &self.harness.chain.spec,
             )
             .unwrap();
@@ -1195,6 +1205,7 @@ impl<E: EthSpec> Tester<E> {
                     status: JsonPayloadStatusV1Status::Valid.into(),
                     latest_valid_hash: Some(block_hash),
                     validation_error: None,
+                    inclusion_list_satisfied: None,
                 },
             );
         }
