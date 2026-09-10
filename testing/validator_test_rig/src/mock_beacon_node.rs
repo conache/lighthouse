@@ -1,4 +1,4 @@
-use eth2::types::{GenericResponse, PublishBlockRequest, SyncingData};
+use eth2::types::{GenericResponse, InclusionListTransactions, PublishBlockRequest, SyncingData};
 use eth2::{BLOB_DATA_INCLUDED_HEADER, BeaconNodeHttpClient, CONSENSUS_VERSION_HEADER, Timeouts};
 use mockito::{Matcher, Mock, Server, ServerGuard};
 use regex::Regex;
@@ -13,7 +13,7 @@ use tracing::info;
 use types::{
     BeaconBlock, ChainSpec, ConfigAndPreset, EthSpec, ExecutionPayloadEnvelope, ForkName, Hash256,
     PayloadAttestationData, PayloadAttestationMessage, SignedBlindedBeaconBlock,
-    SignedExecutionPayloadEnvelope, Slot,
+    SignedExecutionPayloadEnvelope, SignedInclusionList, Slot,
 };
 
 pub struct MockBeaconNode<E: EthSpec> {
@@ -24,6 +24,7 @@ pub struct MockBeaconNode<E: EthSpec> {
     pub received_full_blocks: Arc<Mutex<Vec<PublishBlockRequest<E>>>>,
     pub execution_payload_envelope: Arc<Mutex<Vec<SignedExecutionPayloadEnvelope<E>>>>,
     pub payload_attestation_message: Arc<Mutex<Vec<PayloadAttestationMessage>>>,
+    pub received_inclusion_lists: Arc<Mutex<Vec<SignedInclusionList>>>,
 }
 
 impl<E: EthSpec> MockBeaconNode<E> {
@@ -42,6 +43,7 @@ impl<E: EthSpec> MockBeaconNode<E> {
             received_full_blocks: Arc::new(Mutex::new(Vec::new())),
             execution_payload_envelope: Arc::new(Mutex::new(Vec::new())),
             payload_attestation_message: Arc::new(Mutex::new(Vec::new())),
+            received_inclusion_lists: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -270,6 +272,38 @@ impl<E: EthSpec> MockBeaconNode<E> {
             .create()
     }
 
+    /// Mocks `GET /eth/v1/validator/inclusion_list`
+    pub fn mock_get_validator_inclusion_list(
+        &mut self,
+        transactions: &InclusionListTransactions,
+        slot: Slot,
+    ) -> Mock {
+        let path_pattern = Regex::new(r"^/eth/v1/validator/inclusion_list$").unwrap();
+
+        let data = GenericResponse::from(transactions.clone());
+
+        self.server
+            .mock("GET", Matcher::Regex(path_pattern.to_string()))
+            .match_query(Matcher::UrlEncoded("slot".into(), slot.to_string()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::to_string(&data).unwrap())
+            .create()
+    }
+
+    /// Mocks `GET /eth/v1/validator/inclusion_list` returning error
+    pub fn mock_get_validator_inclusion_list_error(&mut self, slot: Slot) -> Mock {
+        let path_pattern = Regex::new(r"^/eth/v1/validator/inclusion_list$").unwrap();
+
+        self.server
+            .mock("GET", Matcher::Regex(path_pattern.to_string()))
+            .match_query(Matcher::UrlEncoded("slot".into(), slot.to_string()))
+            .with_status(500)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"message":"Internal server error"}"#)
+            .create()
+    }
+
     /// Mocks the `post_beacon_blinded_blocks_v2_ssz` response with an optional `delay`.
     pub fn mock_post_beacon_blinded_blocks_v2_ssz(&mut self, delay: Duration) -> Mock {
         let path_pattern = Regex::new(r"^/eth/v2/beacon/blinded_blocks$").unwrap();
@@ -455,6 +489,78 @@ impl<E: EthSpec> MockBeaconNode<E> {
         self.server
             .mock("POST", Matcher::Regex(path_pattern.to_string()))
             .match_header("content-type", "application/octet-stream")
+            .with_status(500)
+            .with_body(r#"{"message":"Internal server error"}"#)
+            .create()
+    }
+
+    /// Mocks `POST /eth/v1/validator/inclusion_list` (JSON) to receive signed inclusion lists.
+    pub fn mock_post_validator_inclusion_list_json(&mut self, fork_name: ForkName) -> Mock {
+        let path_pattern = Regex::new(r"^/eth/v1/validator/inclusion_list$").unwrap();
+
+        let received_inclusion_lists = Arc::clone(&self.received_inclusion_lists);
+
+        self.server
+            .mock("POST", Matcher::Regex(path_pattern.to_string()))
+            .match_header("content-type", "application/json")
+            .match_header(CONSENSUS_VERSION_HEADER, fork_name.to_string().as_str())
+            .with_status(200)
+            .with_body_from_request(move |request| {
+                let body = request.body().expect("Failed to get request body");
+                // The request body is wrapped in a `data` object, per the beacon-APIs specs
+                let wrapper: GenericResponse<SignedInclusionList> = serde_json::from_slice(body)
+                    .expect("Failed to deserialize SignedInclusionList from JSON");
+                received_inclusion_lists.lock().unwrap().push(wrapper.data);
+                vec![]
+            })
+            .create()
+    }
+
+    /// Mocks `POST /eth/v1/validator/inclusion_list` (JSON) returning error
+    pub fn mock_post_validator_inclusion_list_json_error(&mut self, fork_name: ForkName) -> Mock {
+        let path_pattern = Regex::new(r"^/eth/v1/validator/inclusion_list$").unwrap();
+
+        self.server
+            .mock("POST", Matcher::Regex(path_pattern.to_string()))
+            .match_header("content-type", "application/json")
+            .match_header(CONSENSUS_VERSION_HEADER, fork_name.to_string().as_str())
+            .with_status(500)
+            .with_body(r#"{"message":"Internal server error"}"#)
+            .create()
+    }
+
+    /// Mocks `POST /eth/v1/validator/inclusion_list` (SSZ) to receive signed inclusion lists.
+    pub fn mock_post_validator_inclusion_list_ssz(&mut self, fork_name: ForkName) -> Mock {
+        let path_pattern = Regex::new(r"^/eth/v1/validator/inclusion_list$").unwrap();
+
+        let received_inclusion_lists = Arc::clone(&self.received_inclusion_lists);
+
+        self.server
+            .mock("POST", Matcher::Regex(path_pattern.to_string()))
+            .match_header("content-type", "application/octet-stream")
+            .match_header(CONSENSUS_VERSION_HEADER, fork_name.to_string().as_str())
+            .with_status(200)
+            .with_body_from_request(move |request| {
+                let body = request.body().expect("Failed to get request body");
+                let inclusion_list = SignedInclusionList::from_ssz_bytes(body)
+                    .expect("Failed to deserialize SignedInclusionList from SSZ");
+                received_inclusion_lists
+                    .lock()
+                    .unwrap()
+                    .push(inclusion_list);
+                vec![]
+            })
+            .create()
+    }
+
+    /// Mocks `POST /eth/v1/validator/inclusion_list` (SSZ) returning error
+    pub fn mock_post_validator_inclusion_list_ssz_error(&mut self, fork_name: ForkName) -> Mock {
+        let path_pattern = Regex::new(r"^/eth/v1/validator/inclusion_list$").unwrap();
+
+        self.server
+            .mock("POST", Matcher::Regex(path_pattern.to_string()))
+            .match_header("content-type", "application/octet-stream")
+            .match_header(CONSENSUS_VERSION_HEADER, fork_name.to_string().as_str())
             .with_status(500)
             .with_body(r#"{"message":"Internal server error"}"#)
             .create()

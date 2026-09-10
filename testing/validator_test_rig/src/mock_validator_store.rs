@@ -4,11 +4,12 @@ use futures::{Stream, stream};
 use std::future::Future;
 use std::sync::Arc;
 use types::{
-    Address, Epoch, ExecutionPayloadEnvelope, Graffiti, MainnetEthSpec, PayloadAttestationData,
-    PayloadAttestationMessage, ProposerPreferences, SelectionProof, SignedAggregateAndProof,
-    SignedContributionAndProof, SignedExecutionPayloadEnvelope, SignedProposerPreferences,
-    SignedValidatorRegistrationData, SingleAttestation, Slot, SyncCommitteeMessage,
-    SyncSelectionProof, SyncSubnetId, ValidatorRegistrationData,
+    Address, Epoch, ExecutionPayloadEnvelope, Graffiti, InclusionList, MainnetEthSpec,
+    PayloadAttestationData, PayloadAttestationMessage, ProposerPreferences, SelectionProof,
+    SignedAggregateAndProof, SignedContributionAndProof, SignedExecutionPayloadEnvelope,
+    SignedInclusionList, SignedProposerPreferences, SignedValidatorRegistrationData,
+    SingleAttestation, Slot, SyncCommitteeMessage, SyncSelectionProof, SyncSubnetId,
+    ValidatorRegistrationData,
 };
 use validator_store::{
     AggregateToSign, AttestationToSign, ContributionToSign, DoppelgangerStatus,
@@ -186,5 +187,13 @@ impl ValidatorStore for MockValidatorStore {
 
     fn proposal_data(&self, _pubkey: &PublicKeyBytes) -> Option<ProposalData> {
         panic!("MockValidatorStore::proposal_data called without a hook")
+    }
+
+    async fn sign_inclusion_list(
+        &self,
+        _validator_pubkey: PublicKeyBytes,
+        _inclusion_list: InclusionList,
+    ) -> Result<SignedInclusionList, StoreError<Self::Error>> {
+        panic!("MockValidatorStore::sign_inclusion_list called without a hook")
     }
 }
