@@ -190,6 +190,10 @@ const EARLY_ATTESTER_CACHE_HISTORIC_SLOTS: u64 = 4;
 /// impact whilst having 8 epochs without a block is a comfortable grace period.
 const MAX_PER_SLOT_FORK_CHOICE_DISTANCE: u64 = 256;
 
+/// How long inclusion list production waits for the current slot's payload to become the execution
+/// layer's head. Matches the default `fork_choice_before_proposal_timeout_ms` of block production.
+const INCLUSION_LIST_HEAD_UPDATE_TIMEOUT: Duration = Duration::from_millis(250);
+
 /// Reported to the user when the justified block has an invalid execution payload.
 pub const INVALID_JUSTIFIED_PAYLOAD_SHUTDOWN_REASON: &str =
     "Justified block has an invalid execution payload.";
@@ -2246,6 +2250,25 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         })
     }
 
+    /// The block hash of the current slot's payload, if the head block is from `current_slot` and
+    /// its payload envelope has been imported.
+    fn current_slot_payload_block_hash(&self, current_slot: Slot) -> Option<ExecutionBlockHash> {
+        let head_block_root = {
+            let head = self.canonical_head.cached_head();
+            if head.head_slot() != current_slot {
+                return None;
+            }
+            head.head_block_root()
+        };
+        let fork_choice = self.canonical_head.fork_choice_read_lock();
+        if !fork_choice.is_payload_received(&head_block_root) {
+            return None;
+        }
+        fork_choice
+            .get_block(&head_block_root)
+            .and_then(|block| block.execution_payload_block_hash)
+    }
+
     /// Produce the inclusion list transactions for `request_slot`.
     ///
     /// The transactions are requested from the execution layer via `getInclusionListV1`.
@@ -2267,6 +2290,25 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             .execution_layer
             .as_ref()
             .ok_or(Error::ExecutionLayerMissing)?;
+
+        // The execution layer drops a payload's transactions from its mempool only once a
+        // `forkchoiceUpdated` makes that payload its head. Give it a moment to get there, so the
+        // list does not repeat transactions the current slot's payload already includes.
+        if let Some(payload_block_hash) = self.current_slot_payload_block_hash(current_slot) {
+            let head_accepted = execution_layer
+                .wait_for_valid_forkchoice_head(
+                    payload_block_hash,
+                    INCLUSION_LIST_HEAD_UPDATE_TIMEOUT,
+                )
+                .await;
+            if !head_accepted {
+                debug!(
+                    %request_slot,
+                    ?payload_block_hash,
+                    "Producing the inclusion list before the payload became the execution head"
+                );
+            }
+        }
 
         let inclusion_list_transactions = execution_layer
             .get_inclusion_list_v1()

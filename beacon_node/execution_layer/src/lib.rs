@@ -39,7 +39,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use strum::AsRefStr;
 use task_executor::TaskExecutor;
 use tokio::{
-    sync::{Mutex, MutexGuard, RwLock},
+    sync::{Mutex, MutexGuard, RwLock, watch},
     time::sleep,
 };
 use tokio_stream::wrappers::WatchStream;
@@ -484,6 +484,8 @@ struct Inner<E: EthSpec> {
     /// This is used *only* in the informational sync status endpoint, so that a VC using this
     /// node can prefer another node with a healthier EL.
     last_new_payload_errored: RwLock<bool>,
+    /// The head block hash of the last `forkchoiceUpdated` the execution engine accepted as valid.
+    valid_forkchoice_head: watch::Sender<Option<ExecutionBlockHash>>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -589,6 +591,7 @@ impl<E: EthSpec> ExecutionLayer<E> {
             executor,
             payload_cache: PayloadCache::default(),
             last_new_payload_errored: RwLock::new(false),
+            valid_forkchoice_head: watch::Sender::new(None),
         };
 
         let el = Self {
@@ -1621,12 +1624,36 @@ impl<E: EthSpec> ExecutionLayer<E> {
             );
         }
 
-        process_payload_status(
+        let status = process_payload_status(
             head_block_hash,
             result.map(|response| response.payload_status),
         )
         .map_err(Box::new)
-        .map_err(Error::EngineError)
+        .map_err(Error::EngineError);
+
+        if let Ok(PayloadStatus::Valid) = status {
+            self.inner
+                .valid_forkchoice_head
+                .send_replace(Some(head_block_hash));
+        }
+
+        status
+    }
+
+    /// Wait until the execution engine has accepted `head_block_hash` as its head through a valid
+    /// `forkchoiceUpdated`, or until `timeout` elapses. Returns whether the head was accepted.
+    pub async fn wait_for_valid_forkchoice_head(
+        &self,
+        head_block_hash: ExecutionBlockHash,
+        timeout: Duration,
+    ) -> bool {
+        let mut receiver = self.inner.valid_forkchoice_head.subscribe();
+        tokio::time::timeout(
+            timeout,
+            receiver.wait_for(|head| *head == Some(head_block_hash)),
+        )
+        .await
+        .is_ok_and(|result| result.is_ok())
     }
 
     /// Returns the execution engine capabilities resulting from a call to
