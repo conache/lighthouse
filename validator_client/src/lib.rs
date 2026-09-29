@@ -425,14 +425,11 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
             beacon_nodes.set_head_send(head_monitor_tx);
         }
 
-        let payload_available_rx = if config.enable_payload_available_monitor {
-            let (payload_available_tx, payload_available_receiver) =
-                mpsc::channel::<PayloadAvailableEvent>(MAX_PAYLOAD_AVAILABLE_EVENT_QUEUE_LEN);
-            beacon_nodes.set_payload_available_send(Arc::new(payload_available_tx));
-            Some(Mutex::new(payload_available_receiver))
-        } else {
-            None
-        };
+        if config.enable_payload_available_monitor {
+            let (payload_available_tx, _) =
+                broadcast::channel::<PayloadAvailableEvent>(MAX_PAYLOAD_AVAILABLE_EVENT_QUEUE_LEN);
+            beacon_nodes.set_payload_available_send(payload_available_tx);
+        }
 
         let beacon_nodes = Arc::new(beacon_nodes);
 
@@ -440,6 +437,12 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
         // channel has no receivers.
         let attestation_head_monitor_rx = beacon_nodes.subscribe_to_head_events();
         let sync_head_monitor_rx = beacon_nodes.subscribe_to_head_events();
+        let payload_attestation_payload_available_rx = beacon_nodes
+            .subscribe_to_payload_available_events()
+            .map(Mutex::new);
+        let inclusion_list_payload_available_rx = beacon_nodes
+            .subscribe_to_payload_available_events()
+            .map(Mutex::new);
 
         start_fallback_updater_service::<_, E>(context.executor.clone(), beacon_nodes.clone())?;
 
@@ -595,7 +598,7 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
             beacon_nodes.clone(),
             context.executor.clone(),
             context.eth2_config.spec.clone(),
-            payload_available_rx,
+            payload_attestation_payload_available_rx,
         );
 
         let proposer_preferences_service = ProposerPreferencesService::new(
@@ -625,6 +628,7 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
             beacon_nodes.clone(),
             context.executor.clone(),
             context.eth2_config.spec.clone(),
+            inclusion_list_payload_available_rx,
         );
 
         Ok(Self {

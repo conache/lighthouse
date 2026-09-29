@@ -7,7 +7,7 @@ use slot_clock::SlotClock;
 use std::ops::Deref;
 use std::sync::Arc;
 use task_executor::TaskExecutor;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, broadcast};
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 use types::{ChainSpec, EthSpec, PayloadAttestationData, Slot};
@@ -38,7 +38,7 @@ pub struct Inner<S, T> {
     beacon_nodes: Arc<BeaconNodeFallback<T>>,
     executor: TaskExecutor,
     chain_spec: Arc<ChainSpec>,
-    payload_available_rx: Option<Mutex<mpsc::Receiver<PayloadAvailableEvent>>>,
+    payload_available_rx: Option<Mutex<broadcast::Receiver<PayloadAvailableEvent>>>,
     latest_voted_slot: Mutex<Option<Slot>>,
 }
 
@@ -74,7 +74,7 @@ where
         beacon_nodes: Arc<BeaconNodeFallback<T>>,
         executor: TaskExecutor,
         chain_spec: Arc<ChainSpec>,
-        payload_available_rx: Option<Mutex<mpsc::Receiver<PayloadAvailableEvent>>>,
+        payload_available_rx: Option<Mutex<broadcast::Receiver<PayloadAvailableEvent>>>,
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -116,7 +116,7 @@ where
             let mut receiver = receiver.lock().await;
             loop {
                 match receiver.recv().await {
-                    Some(payload_available_event) => {
+                    Ok(payload_available_event) => {
                         // Only trigger on current-slot events
                         let Some(current_slot) = self.slot_clock.now() else {
                             error!("Failed to read slot clock; ignoring payload available event");
@@ -127,7 +127,10 @@ where
                         }
                         // Stale event — keep waiting for the deadline
                     }
-                    None => {
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        warn!(skipped, "Payload available channel lagged");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
                         error!("Payload available channel closed, deadline attestations only");
                         break;
                     }
@@ -483,7 +486,7 @@ mod tests {
     impl TestHarness {
         async fn new_with_validators(
             num_validators: usize,
-            payload_rx: Option<mpsc::Receiver<PayloadAvailableEvent>>,
+            payload_rx: Option<broadcast::Receiver<PayloadAvailableEvent>>,
         ) -> Self {
             Self::create_validators_with_gloas_fork_epoch(num_validators, payload_rx, Epoch::new(0))
                 .await
@@ -491,7 +494,7 @@ mod tests {
 
         async fn create_validators_with_gloas_fork_epoch(
             num_validators: usize,
-            payload_rx: Option<mpsc::Receiver<PayloadAvailableEvent>>,
+            payload_rx: Option<broadcast::Receiver<PayloadAvailableEvent>>,
             gloas_fork_epoch: Epoch,
         ) -> Self {
             let mut harness = ValidatorClientHarness::new(num_validators).await;
@@ -515,7 +518,7 @@ mod tests {
     fn build_service<S: ValidatorStore + 'static>(
         harness: &ValidatorClientHarness,
         store: Arc<S>,
-        payload_rx: Option<mpsc::Receiver<PayloadAvailableEvent>>,
+        payload_rx: Option<broadcast::Receiver<PayloadAvailableEvent>>,
     ) -> PayloadAttestationService<S, ManualSlotClock> {
         let duties_service = Arc::new(
             DutiesServiceBuilder::new()
@@ -1203,7 +1206,7 @@ mod tests {
 
     #[tokio::test]
     async fn poll_for_payload_available_event_filters_stale_events() {
-        let (payload_tx, payload_rx) = mpsc::channel::<PayloadAvailableEvent>(10);
+        let (payload_tx, payload_rx) = broadcast::channel::<PayloadAvailableEvent>(10);
         let test_harness = TestHarness::new_with_validators(1, Some(payload_rx)).await;
 
         // Advance to slot 1
@@ -1219,7 +1222,6 @@ mod tests {
                 slot: Slot::new(0), // stale — must be skipped
                 block_root: Hash256::from_low_u64_be(1),
             })
-            .await
             .unwrap();
 
         payload_tx
@@ -1228,7 +1230,6 @@ mod tests {
                 slot: current_slot, // valid — must be returned
                 block_root: Hash256::from_low_u64_be(2),
             })
-            .await
             .unwrap();
 
         let event = test_harness
@@ -1245,7 +1246,7 @@ mod tests {
 
     #[tokio::test]
     async fn early_event_at_slot_zero_produces_attestation() {
-        let (payload_tx, payload_rx) = mpsc::channel::<PayloadAvailableEvent>(10);
+        let (payload_tx, payload_rx) = broadcast::channel::<PayloadAvailableEvent>(10);
         let mut test_harness = TestHarness::new_with_validators(1, Some(payload_rx)).await;
         let attestation_slot = Slot::new(0);
         test_harness.insert_ptc_duties(attestation_slot);
@@ -1281,7 +1282,6 @@ mod tests {
                 slot: attestation_slot,
                 block_root,
             })
-            .await
             .unwrap();
         service.spawn_payload_attestation_tasks().await.unwrap();
         assert_eq!(
@@ -1298,7 +1298,6 @@ mod tests {
                 slot: attestation_slot,
                 block_root,
             })
-            .await
             .unwrap();
         service.spawn_payload_attestation_tasks().await.unwrap();
         mock_get.expect(1).assert();
@@ -1308,7 +1307,7 @@ mod tests {
     async fn early_event_failure_retries_at_deadline() {
         tokio::time::pause();
 
-        let (payload_tx, payload_rx) = mpsc::channel::<PayloadAvailableEvent>(10);
+        let (payload_tx, payload_rx) = broadcast::channel::<PayloadAvailableEvent>(10);
         let mut test_harness = TestHarness::new_with_validators(1, Some(payload_rx)).await;
         let attestation_slot = Slot::new(1);
         test_harness.insert_ptc_duties(attestation_slot);
@@ -1352,7 +1351,6 @@ mod tests {
                 slot: attestation_slot,
                 block_root,
             })
-            .await
             .unwrap();
 
         let service = &test_harness.service;

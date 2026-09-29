@@ -29,7 +29,7 @@ use std::vec::Vec;
 use strum::VariantNames;
 use task_executor::TaskExecutor;
 use tokio::{
-    sync::{RwLock, broadcast, mpsc},
+    sync::{RwLock, broadcast},
     time::sleep,
 };
 use tracing::{debug, error, warn};
@@ -463,7 +463,7 @@ pub struct BeaconNodeFallback<T> {
     slot_clock: Option<T>,
     beacon_head_cache: Option<Arc<BeaconHeadCache>>,
     head_monitor_send: Option<broadcast::Sender<HeadEvent>>,
-    payload_available_send: Option<Arc<mpsc::Sender<PayloadAvailableEvent>>>,
+    payload_available_send: Option<broadcast::Sender<PayloadAvailableEvent>>,
     broadcast_topics: Vec<ApiTopic>,
     spec: Arc<ChainSpec>,
 }
@@ -517,9 +517,18 @@ impl<T: SlotClock> BeaconNodeFallback<T> {
     /// validator client is connected to in the `BeaconNodeFallback`.
     pub fn set_payload_available_send(
         &mut self,
-        payload_available_send: Arc<mpsc::Sender<PayloadAvailableEvent>>,
+        payload_available_send: broadcast::Sender<PayloadAvailableEvent>,
     ) {
         self.payload_available_send = Some(payload_available_send);
+    }
+
+    /// Subscribe to the stream of payload available events, if the payload monitor is enabled.
+    pub fn subscribe_to_payload_available_events(
+        &self,
+    ) -> Option<broadcast::Receiver<PayloadAvailableEvent>> {
+        self.payload_available_send
+            .as_ref()
+            .map(|sender| sender.subscribe())
     }
 
     /// The count of candidates, regardless of their state.

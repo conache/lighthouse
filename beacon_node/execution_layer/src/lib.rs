@@ -485,6 +485,7 @@ struct Inner<E: EthSpec> {
     /// node can prefer another node with a healthier EL.
     last_new_payload_errored: RwLock<bool>,
     /// The head block hash of the last `forkchoiceUpdated` the execution engine accepted as valid.
+    /// Updated on the fork choice update path with a non-blocking send.
     valid_forkchoice_head: watch::Sender<Option<ExecutionBlockHash>>,
 }
 
@@ -2299,6 +2300,75 @@ mod test {
             .await
             .expect("payload body request by hash should succeed");
         assert_eq!(bodies_by_hash, vec![Some(expected_body.clone()), None]);
+    }
+
+    async fn notify_forkchoice_updated(
+        mock: &MockExecutionLayer,
+        head_block_hash: ExecutionBlockHash,
+    ) -> PayloadStatus {
+        mock.el
+            .notify_forkchoice_updated(
+                head_block_hash,
+                ExecutionBlockHash::zero(),
+                ExecutionBlockHash::zero(),
+                Slot::new(0),
+                Hash256::repeat_byte(42),
+                fork_choice::PayloadStatus::Pending,
+                &[],
+            )
+            .await
+            .expect("forkchoiceUpdated should succeed")
+    }
+
+    #[tokio::test]
+    async fn wait_for_valid_forkchoice_head() {
+        let runtime = TestRuntime::default();
+        let mock = MockExecutionLayer::default_params(runtime.task_executor.clone());
+        let head_block_hash = mock
+            .server
+            .execution_block_generator()
+            .latest_block()
+            .unwrap()
+            .block_hash();
+        let timeout = Duration::from_millis(100);
+
+        // A waiter resolves once a valid `forkchoiceUpdated` makes the block the head
+        let (head_accepted, status) = tokio::join!(
+            mock.el
+                .wait_for_valid_forkchoice_head(head_block_hash, Duration::from_secs(5)),
+            notify_forkchoice_updated(&mock, head_block_hash),
+        );
+        assert_eq!(status, PayloadStatus::Valid);
+        assert!(head_accepted);
+
+        // The accepted head is seen without another update, a different head is not
+        assert!(
+            mock.el
+                .wait_for_valid_forkchoice_head(head_block_hash, timeout)
+                .await
+        );
+        assert!(
+            !mock
+                .el
+                .wait_for_valid_forkchoice_head(ExecutionBlockHash::repeat_byte(0x42), timeout)
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_for_valid_forkchoice_head_ignores_syncing_head() {
+        let runtime = TestRuntime::default();
+        let mock = MockExecutionLayer::default_params(runtime.task_executor.clone());
+        let unknown_block_hash = ExecutionBlockHash::repeat_byte(0x42);
+
+        let status = notify_forkchoice_updated(&mock, unknown_block_hash).await;
+        assert_eq!(status, PayloadStatus::Syncing);
+        assert!(
+            !mock
+                .el
+                .wait_for_valid_forkchoice_head(unknown_block_hash, Duration::from_millis(100))
+                .await
+        );
     }
 
     #[tokio::test]

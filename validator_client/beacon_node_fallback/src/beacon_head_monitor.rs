@@ -20,8 +20,8 @@ pub struct HeadEvent {
     pub beacon_block_root: Hash256,
 }
 // This is used to send a signal when a payload is available to the
-// `PayloadAttestationService` for further processing.
-#[derive(Debug)]
+// `PayloadAttestationService` and the `InclusionListService` for further processing.
+#[derive(Debug, Clone)]
 pub struct PayloadAvailableEvent {
     pub beacon_node_index: usize,
     pub slot: types::Slot,
@@ -292,17 +292,12 @@ pub async fn poll_payload_available_event_from_beacon_nodes<E: EthSpec, T: SlotC
                     slot = %ev.slot,
                     "New payload from beacon node"
                 );
-                if payload_available_send
-                    .send(PayloadAvailableEvent {
-                        beacon_node_index: candidate_index,
-                        slot: ev.slot,
-                        block_root: ev.block_root,
-                    })
-                    .await
-                    .is_err()
-                {
-                    return Err("Payload available channel closed".into());
-                }
+                // Sending only fails when no service is subscribed, which is not an error.
+                let _ = payload_available_send.send(PayloadAvailableEvent {
+                    beacon_node_index: candidate_index,
+                    slot: ev.slot,
+                    block_root: ev.block_root,
+                });
             }
             Ok(event) => {
                 warn!(

@@ -1,17 +1,23 @@
 use crate::duties_service::DutiesService;
-use beacon_node_fallback::BeaconNodeFallback;
+use beacon_node_fallback::{BeaconNodeFallback, beacon_head_monitor::PayloadAvailableEvent};
 use eth2::types::{InclusionListDuty, InclusionListTransactions};
 use logging::crit;
 use slot_clock::SlotClock;
 use std::ops::Deref;
 use std::sync::Arc;
+use std::time::Duration;
 use task_executor::TaskExecutor;
+use tokio::sync::{Mutex, broadcast};
 use tokio::time::sleep;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use types::{ChainSpec, EthSpec, ForkName, Hash256, InclusionList, SignedInclusionList, Slot};
 use validator_store::ValidatorStore;
 
 type DependentRoot = Hash256;
+
+/// Inclusion lists are produced this long before the inclusion list deadline if the slot's payload
+/// is not available earlier.
+const INCLUSION_LIST_PRODUCTION_MARGIN: Duration = Duration::from_secs(1);
 
 struct InclusionListData {
     dependent_root: DependentRoot,
@@ -25,6 +31,7 @@ pub struct Inner<S, T> {
     beacon_nodes: Arc<BeaconNodeFallback<T>>,
     executor: TaskExecutor,
     chain_spec: Arc<ChainSpec>,
+    payload_available_rx: Option<Mutex<broadcast::Receiver<PayloadAvailableEvent>>>,
 }
 
 pub struct InclusionListService<S, T> {
@@ -59,6 +66,7 @@ where
         beacon_nodes: Arc<BeaconNodeFallback<T>>,
         executor: TaskExecutor,
         chain_spec: Arc<ChainSpec>,
+        payload_available_rx: Option<Mutex<broadcast::Receiver<PayloadAvailableEvent>>>,
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -68,6 +76,7 @@ where
                 beacon_nodes,
                 executor,
                 chain_spec,
+                payload_available_rx,
             }),
         }
     }
@@ -75,6 +84,7 @@ where
     pub fn start_update_service(self) -> Result<(), String> {
         info!(
             inclusion_list_due_ms = self.chain_spec.get_inclusion_list_due().as_millis(),
+            inclusion_list_production_due_ms = self.inclusion_list_production_due().as_millis(),
             "Inclusion list service started"
         );
         let executor = self.executor.clone();
@@ -93,15 +103,11 @@ where
     }
 
     async fn spawn_inclusion_list_tasks(&self) -> Result<(), String> {
-        // TODO(heze): consider producing the inclusion list after the slot's envelope is
-        // revealed instead of right at the start of the slot, keeping the current approach
-        // as a fallback. Producing at slot start means the list can include transactions
-        // that the current slot's payload already includes. These would mean redundant constraints
-        // that put no pressure on the next builder. Building after the envelopes reveal would
-        // keep only still-pending transactions
         let Some(slot) = self.wait_to_next_slot().await else {
             return Ok(());
         };
+
+        self.wait_for_production_trigger(slot).await;
 
         let Some((duties, inclusion_list_data)) =
             self.produce_inclusion_list_duties_data(slot).await?
@@ -122,6 +128,56 @@ where
             "inclusion_list_producer",
         );
         Ok(())
+    }
+
+    /// Duration into the slot at which inclusion lists are produced if the slot's payload is not
+    /// available earlier.
+    fn inclusion_list_production_due(&self) -> Duration {
+        self.chain_spec
+            .get_inclusion_list_due()
+            .saturating_sub(INCLUSION_LIST_PRODUCTION_MARGIN)
+    }
+
+    /// Wait until inclusion lists for `slot` should be produced: once the slot's payload is
+    /// available, or at the production due time, whichever comes first.
+    async fn wait_for_production_trigger(&self, slot: Slot) {
+        let duration_to_production_due = self
+            .slot_clock
+            .duration_to_slot(slot + 1)
+            .and_then(|d| d.checked_add(self.inclusion_list_production_due()))
+            .map(|d| d.saturating_sub(self.chain_spec.get_slot_duration()))
+            .unwrap_or_default();
+
+        tokio::select! {
+            _ = self.poll_for_payload_available_event(slot) => {}
+            _ = sleep(duration_to_production_due) => {}
+        }
+    }
+
+    /// Wait for a payload available event for `slot`.
+    async fn poll_for_payload_available_event(&self, slot: Slot) -> PayloadAvailableEvent {
+        if let Some(receiver) = &self.payload_available_rx {
+            let mut receiver = receiver.lock().await;
+            loop {
+                match receiver.recv().await {
+                    Ok(payload_available_event) if payload_available_event.slot == slot => {
+                        return payload_available_event;
+                    }
+                    // Stale event, keep waiting for the production due time
+                    Ok(_) => {}
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        warn!(skipped, "Payload available channel lagged");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        error!("Payload available channel closed, producing at the due time only");
+                        break;
+                    }
+                }
+            }
+        }
+        // No event sourced, or the channel died. This ensures we never resolve so that inclusion
+        // lists are always produced at the production due time.
+        std::future::pending().await
     }
 
     async fn wait_to_next_slot(&self) -> Option<Slot> {
@@ -349,10 +405,20 @@ mod tests {
 
     impl TestHarness {
         async fn new_with_validators(num_validators: usize) -> Self {
-            Self::new_with_heze_at(num_validators, Epoch::new(0)).await
+            Self::new_with_heze_at(num_validators, Epoch::new(0), None).await
         }
 
-        async fn new_with_heze_at(num_validators: usize, heze_fork_epoch: Epoch) -> Self {
+        async fn new_with_payload_rx(
+            payload_rx: broadcast::Receiver<PayloadAvailableEvent>,
+        ) -> Self {
+            Self::new_with_heze_at(1, Epoch::new(0), Some(payload_rx)).await
+        }
+
+        async fn new_with_heze_at(
+            num_validators: usize,
+            heze_fork_epoch: Epoch,
+            payload_rx: Option<broadcast::Receiver<PayloadAvailableEvent>>,
+        ) -> Self {
             let harness = ValidatorClientHarness::new(num_validators).await;
 
             let mut spec = (*harness.spec).clone();
@@ -377,6 +443,7 @@ mod tests {
                 harness.beacon_nodes.clone(),
                 harness.test_runtime.task_executor.clone(),
                 spec,
+                payload_rx.map(Mutex::new),
             );
 
             Self { harness, service }
@@ -413,7 +480,7 @@ mod tests {
     async fn waits_until_next_epoch_before_heze_fork() {
         tokio::time::pause();
 
-        let harness = TestHarness::new_with_heze_at(1, Epoch::new(1)).await;
+        let harness = TestHarness::new_with_heze_at(1, Epoch::new(1), None).await;
         let service = &harness.service;
 
         // Add duties for a pre-Heze slot
@@ -471,6 +538,49 @@ mod tests {
             service_wait.as_mut().now_or_never().unwrap(),
             Some(Slot::new(1))
         );
+    }
+
+    #[tokio::test]
+    async fn production_waits_until_due_without_payload_event() {
+        tokio::time::pause();
+
+        let harness = TestHarness::new_with_validators(1).await;
+        let service = &harness.service;
+        let trigger = service.wait_for_production_trigger(Slot::new(0));
+        tokio::pin!(trigger);
+        assert!(trigger.as_mut().now_or_never().is_none());
+
+        // 7s into the slot: 1s before the 8s inclusion list deadline
+        let production_due = service.inclusion_list_production_due();
+        assert_eq!(production_due, Duration::from_secs(7));
+        advance_time(&service.slot_clock, production_due).await;
+        assert!(trigger.as_mut().now_or_never().is_none());
+
+        advance_time(&service.slot_clock, Duration::from_millis(1)).await;
+        assert!(trigger.as_mut().now_or_never().is_some());
+    }
+
+    #[tokio::test]
+    async fn production_follows_payload_event_for_slot() {
+        let (payload_tx, payload_rx) = broadcast::channel::<PayloadAvailableEvent>(10);
+        let harness = TestHarness::new_with_payload_rx(payload_rx).await;
+        let service = &harness.service;
+        let slot = Slot::new(1);
+        let payload_available_event = |slot| PayloadAvailableEvent {
+            beacon_node_index: 0,
+            slot,
+            block_root: Hash256::repeat_byte(0xab),
+        };
+
+        let trigger = service.wait_for_production_trigger(slot);
+        tokio::pin!(trigger);
+
+        // A stale event does not trigger production
+        payload_tx.send(payload_available_event(slot - 1)).unwrap();
+        assert!(trigger.as_mut().now_or_never().is_none());
+
+        payload_tx.send(payload_available_event(slot)).unwrap();
+        assert!(trigger.as_mut().now_or_never().is_some());
     }
 
     #[tokio::test]
