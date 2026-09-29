@@ -39,6 +39,9 @@ use crate::execution_proof_verification::{GossipVerifiedExecutionProof, Observed
 use crate::fork_choice_signal::{ForkChoiceSignalRx, ForkChoiceSignalTx};
 use crate::graffiti_calculator::{GraffitiCalculator, GraffitiSettings};
 use crate::inclusion_list_store::{DependentRoot, InclusionListStore};
+use crate::inclusion_list_verification::{
+    verify_inclusion_list_transactions_bounds, verify_no_blob_transactions,
+};
 use crate::light_client_finality_update_verification::{
     Error as LightClientFinalityUpdateError, VerifiedLightClientFinalityUpdate,
 };
@@ -186,6 +189,10 @@ const EARLY_ATTESTER_CACHE_HISTORIC_SLOTS: u64 = 4;
 /// 20 slots/second. Having a single fork-choice run interrupt syncing would have very little
 /// impact whilst having 8 epochs without a block is a comfortable grace period.
 const MAX_PER_SLOT_FORK_CHOICE_DISTANCE: u64 = 256;
+
+/// How long inclusion list production waits for the current slot's payload to become the execution
+/// layer's head. Matches the default `fork_choice_before_proposal_timeout_ms` of block production.
+const INCLUSION_LIST_HEAD_UPDATE_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Reported to the user when the justified block has an invalid execution payload.
 pub const INVALID_JUSTIFIED_PAYLOAD_SHUTDOWN_REASON: &str =
@@ -2241,6 +2248,85 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             payload_present,
             blob_data_available,
         })
+    }
+
+    /// The block hash of the current slot's payload, if the head block is from `current_slot` and
+    /// its payload envelope has been imported.
+    fn current_slot_payload_block_hash(&self, current_slot: Slot) -> Option<ExecutionBlockHash> {
+        let head_block_root = {
+            let head = self.canonical_head.cached_head();
+            if head.head_slot() != current_slot {
+                return None;
+            }
+            head.head_block_root()
+        };
+        let fork_choice = self.canonical_head.fork_choice_read_lock();
+        if !fork_choice.is_payload_received(&head_block_root) {
+            return None;
+        }
+        fork_choice
+            .get_block(&head_block_root)
+            .and_then(|block| block.execution_payload_block_hash)
+    }
+
+    /// Produce the inclusion list transactions for `request_slot`.
+    ///
+    /// The transactions are requested from the execution layer via `getInclusionListV1`.
+    /// An empty list is a valid answer (nothing to include) and is returned as such, while a
+    /// list that violates the rules the engine API places on it (size bounds, no blob
+    /// transactions) is an execution layer fault and is rejected
+    pub async fn produce_inclusion_list(
+        &self,
+        request_slot: Slot,
+    ) -> Result<ProgressiveTransactions, Error> {
+        // Inclusion lists are only produced for the current slot.
+        let current_slot = self.slot()?;
+        if request_slot != current_slot {
+            return Err(Error::InvalidSlot(request_slot));
+        }
+        let _timer = metrics::start_timer(&metrics::INCLUSION_LIST_PRODUCTION_SECONDS);
+
+        let execution_layer = self
+            .execution_layer
+            .as_ref()
+            .ok_or(Error::ExecutionLayerMissing)?;
+
+        // The execution layer drops a payload's transactions from its mempool only once a
+        // `forkchoiceUpdated` makes that payload its head. Give it a moment to get there, so the
+        // list does not repeat transactions the current slot's payload already includes.
+        if let Some(payload_block_hash) = self.current_slot_payload_block_hash(current_slot) {
+            let head_accepted = execution_layer
+                .wait_for_valid_forkchoice_head(
+                    payload_block_hash,
+                    INCLUSION_LIST_HEAD_UPDATE_TIMEOUT,
+                )
+                .await;
+            if !head_accepted {
+                debug!(
+                    %request_slot,
+                    ?payload_block_hash,
+                    "Producing the inclusion list before the payload became the execution head"
+                );
+            }
+        }
+
+        let inclusion_list_transactions = execution_layer
+            .get_inclusion_list_v1()
+            .await
+            .map_err(|e| Error::ExecutionLayerGetInclusionListFailed(Box::new(e)))?;
+
+        verify_inclusion_list_transactions_bounds(&inclusion_list_transactions, &self.spec)
+            .and_then(|()| verify_no_blob_transactions(&inclusion_list_transactions))
+            .inspect_err(|e| {
+                warn!(
+                    error = ?e,
+                    %request_slot,
+                    "Execution layer returned an invalid inclusion list"
+                )
+            })
+            .map_err(Error::InvalidInclusionListFromExecutionLayer)?;
+
+        Ok(inclusion_list_transactions)
     }
 
     /// Performs the same validation as `Self::verify_unaggregated_attestation_for_gossip`, but for
