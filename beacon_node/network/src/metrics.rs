@@ -507,6 +507,14 @@ pub static SYNC_DATA_COLUMNS_BY_RANGE_REQUEST_COLUMNS: LazyLock<Result<Histogram
             Ok(vec![1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0]),
         )
     });
+pub static SYNC_INCLUSION_LISTS_BY_INDICES_REQUEST_INDICES: LazyLock<Result<Histogram>> =
+    LazyLock::new(|| {
+        try_create_histogram_with_buckets(
+            "sync_inclusion_lists_by_indices_request_indices",
+            "Number of inclusion list committee positions requested from one peer in a single InclusionListsByIndices request",
+            Ok(vec![1.0, 2.0, 4.0, 8.0, 16.0]),
+        )
+    });
 pub static SYNCING_CHAIN_BATCH_DOWNLOADING: LazyLock<Result<Histogram>> = LazyLock::new(|| {
     try_create_histogram_with_buckets(
         "sync_range_chain_batch_downloading_seconds",

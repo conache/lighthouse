@@ -10,6 +10,9 @@ use types::{
 
 pub type Id = u32;
 
+/// Id of an inclusion_lists_by_indices request sent by sync.
+pub type InclusionListsByIndicesRequestId = Id;
+
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub struct SingleLookupReqId {
     pub lookup_id: Id,
@@ -34,7 +37,9 @@ pub enum SyncRequestId {
     /// Payload envelopes by range request
     PayloadEnvelopesByRange(PayloadEnvelopesByRangeRequestId),
     /// Inclusion Lists by indices request
-    InclusionListsByIndices { id: Id },
+    InclusionListsByIndices {
+        id: InclusionListsByIndicesRequestId,
+    },
 }
 
 /// Request ID for data_columns_by_root requests. Block lookups do not issue this request directly.

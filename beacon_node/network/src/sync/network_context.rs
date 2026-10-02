@@ -3,7 +3,8 @@
 
 use self::custody::{ActiveCustodyRequest, Error as CustodyRequestError};
 pub use self::requests::{
-    BlocksByRootSingleRequest, DataColumnsByRootRequestParams, PayloadEnvelopesByRootSingleRequest,
+    BlocksByRootSingleRequest, DataColumnsByRootRequestParams,
+    InclusionListsByIndicesRequestParams, PayloadEnvelopesByRootSingleRequest,
 };
 use super::SyncMessage;
 use super::block_sidecar_coupling::RangeBlockComponentsRequest;
@@ -34,8 +35,8 @@ use lighthouse_network::service::api_types::{
     AppRequestId, BlobsByRangeRequestId, BlocksByRangeRequestId, ComponentsByRangeRequestId,
     CustodyBackFillBatchRequestId, CustodyBackfillBatchId, CustodyId, CustodyRequester,
     DataColumnsByRangeRequestId, DataColumnsByRangeRequester, DataColumnsByRootRequestId,
-    DataColumnsByRootRequester, Id, PayloadEnvelopesByRangeRequestId, SingleLookupReqId,
-    SyncRequestId,
+    DataColumnsByRootRequester, Id, InclusionListsByIndicesRequestId,
+    PayloadEnvelopesByRangeRequestId, SingleLookupReqId, SyncRequestId,
 };
 use lighthouse_network::{Client, NetworkGlobals, PeerAction, PeerId, ReportSource};
 use parking_lot::RwLock;
@@ -43,7 +44,8 @@ pub use requests::LookupVerifyError;
 use requests::{
     ActiveRequestItems, ActiveRequests, BlobsByRangeRequestItems, BlocksByRangeRequestItems,
     BlocksByRootRequestItems, DataColumnsByRangeRequestItems, DataColumnsByRootRequestItems,
-    PayloadEnvelopesByRangeRequestItems, PayloadEnvelopesByRootRequestItems,
+    InclusionListsByIndicesRequestItems, PayloadEnvelopesByRangeRequestItems,
+    PayloadEnvelopesByRootRequestItems,
 };
 #[cfg(test)]
 use slot_clock::SlotClock;
@@ -255,6 +257,10 @@ pub struct SyncNetworkContext<T: BeaconChainTypes> {
     custody_backfill_data_column_batch_requests:
         FnvHashMap<CustodyBackFillBatchRequestId, RangeDataColumnBatchRequest<T>>,
 
+    /// A mapping of active InclusionListsByIndices requests
+    inclusion_lists_by_indices_requests:
+        ActiveRequests<InclusionListsByIndicesRequestId, InclusionListsByIndicesRequestItems>,
+
     /// Whether the ee is online. If it's not, we don't allow access to the
     /// `beacon_processor_send`.
     execution_engine_state: EngineState,
@@ -337,6 +343,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
             custody_by_root_requests: <_>::default(),
             components_by_range_requests: FnvHashMap::default(),
             custody_backfill_data_column_batch_requests: FnvHashMap::default(),
+            inclusion_lists_by_indices_requests: ActiveRequests::new("inclusion_lists_by_indices"),
             network_beacon_processor,
             chain,
             fork_context,
@@ -367,6 +374,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
             blobs_by_range_requests,
             data_columns_by_range_requests,
             payload_envelopes_by_range_requests,
+            inclusion_lists_by_indices_requests,
             // custody_by_root_requests is a meta request of data_columns_by_root_requests
             custody_by_root_requests: _,
             // components_by_range_requests is a meta request of various _by_range requests
@@ -406,6 +414,10 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
             .active_requests_of_peer(peer_id)
             .into_iter()
             .map(|req_id| SyncRequestId::PayloadEnvelopesByRange(*req_id));
+        let inclusion_lists_by_indices_ids = inclusion_lists_by_indices_requests
+            .active_requests_of_peer(peer_id)
+            .into_iter()
+            .map(|id| SyncRequestId::InclusionListsByIndices { id: *id });
         blocks_by_root_ids
             .chain(payload_envelopes_by_root_ids)
             .chain(data_column_by_root_ids)
@@ -413,6 +425,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
             .chain(blobs_by_range_ids)
             .chain(data_column_by_range_ids)
             .chain(payload_envelope_by_range_ids)
+            .chain(inclusion_lists_by_indices_ids)
             .collect()
     }
 
@@ -1219,6 +1232,53 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
             peer_id,
             false,
             PayloadEnvelopesByRangeRequestItems::new(request),
+            request_span,
+        );
+        Ok(id)
+    }
+
+    pub fn send_inclusion_lists_by_indices_request(
+        &mut self,
+        peer_id: PeerId,
+        request: InclusionListsByIndicesRequestParams,
+        request_span: Span,
+    ) -> Result<InclusionListsByIndicesRequestId, RpcRequestSendError> {
+        let id = self.next_id();
+
+        self.send_network_msg(NetworkMessage::SendRequest {
+            peer_id,
+            request: RequestType::InclusionListsByIndices(
+                request
+                    .clone()
+                    .try_into_request::<T::EthSpec>()
+                    .map_err(|e| RpcRequestSendError::InternalError(e.to_owned()))?,
+            ),
+            app_request_id: AppRequestId::Sync(SyncRequestId::InclusionListsByIndices { id }),
+        })
+        .map_err(|_| RpcRequestSendError::InternalError("network send error".to_owned()))?;
+
+        metrics::observe(
+            &metrics::SYNC_INCLUSION_LISTS_BY_INDICES_REQUEST_INDICES,
+            request.requested.len() as f64,
+        );
+
+        debug!(
+            method = "InclusionListsByIndices",
+            slot = %request.slot,
+            dependent_root = ?request.dependent_root,
+            requested = ?request.requested,
+            peer = %peer_id,
+            %id,
+            "Inclusion lists by indices RPC request sent"
+        );
+
+        self.inclusion_lists_by_indices_requests.insert(
+            id,
+            peer_id,
+            // false = do not enforce that every requested list is returned. A peer may hold fewer
+            // inclusion lists than requested.
+            false,
+            InclusionListsByIndicesRequestItems::new(request),
             request_span,
         );
         Ok(id)

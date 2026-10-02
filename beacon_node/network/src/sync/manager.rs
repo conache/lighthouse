@@ -57,8 +57,8 @@ use lighthouse_network::service::api_types::{
     BlobsByRangeRequestId, BlocksByRangeRequestId, ComponentsByRangeRequestId,
     CustodyBackFillBatchRequestId, CustodyBackfillBatchId, CustodyRequester,
     DataColumnsByRangeRequestId, DataColumnsByRangeRequester, DataColumnsByRootRequestId,
-    DataColumnsByRootRequester, Id, PayloadEnvelopesByRangeRequestId, SingleLookupReqId,
-    SyncRequestId,
+    DataColumnsByRootRequester, Id, InclusionListsByIndicesRequestId,
+    PayloadEnvelopesByRangeRequestId, SingleLookupReqId, SyncRequestId,
 };
 use lighthouse_network::types::{NetworkGlobals, SyncState};
 use lighthouse_network::{PeerAction, PeerId};
@@ -1498,7 +1498,7 @@ impl<T: BeaconChainTypes> SyncManager<T> {
     /// Handles receiving a response for an inclusion lists by indices request.
     fn on_inclusion_lists_by_indices_response(
         &mut self,
-        request_id: Id,
+        request_id: InclusionListsByIndicesRequestId,
         peer_id: PeerId,
         inclusion_list: RpcEvent<Arc<SignedInclusionList>>,
     ) {

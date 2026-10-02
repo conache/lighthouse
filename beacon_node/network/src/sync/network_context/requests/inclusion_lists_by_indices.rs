@@ -1,30 +1,51 @@
 use lighthouse_network::rpc::methods::InclusionListsByIndicesRequest;
 use std::sync::Arc;
-use types::{EthSpec, SignedInclusionList};
+use types::{EthSpec, Hash256, InclusionListBits, SignedInclusionList, Slot};
 
 use super::{ActiveRequestItems, LookupVerifyError};
 
-pub struct InclusionListsByIndicesRequestItems<E: EthSpec> {
-    request: InclusionListsByIndicesRequest<E>,
-    /// Validator indices at the requested committee positions.
-    validator_indices: Vec<u64>,
+#[derive(Debug, Clone)]
+pub struct InclusionListsByIndicesRequestParams {
+    pub slot: Slot,
+    pub dependent_root: Hash256,
+    /// Requested inclusion list committee positions, each with the validator index
+    /// corresponding to that position.
+    pub requested: Vec<(usize, u64)>,
+}
+
+impl InclusionListsByIndicesRequestParams {
+    pub fn try_into_request<E: EthSpec>(
+        self,
+    ) -> Result<InclusionListsByIndicesRequest<E>, &'static str> {
+        let mut indices = InclusionListBits::<E>::new();
+        for (position, _) in &self.requested {
+            indices
+                .set(*position, true)
+                .map_err(|_| "Position exceeds the inclusion list committee size")?;
+        }
+        Ok(InclusionListsByIndicesRequest {
+            slot: self.slot,
+            dependent_root: self.dependent_root,
+            indices,
+        })
+    }
+}
+
+pub struct InclusionListsByIndicesRequestItems {
+    request: InclusionListsByIndicesRequestParams,
     items: Vec<Arc<SignedInclusionList>>,
 }
 
-impl<E: EthSpec> InclusionListsByIndicesRequestItems<E> {
-    pub fn new(
-        request: InclusionListsByIndicesRequest<E>,
-        requested_validator_indices: Vec<u64>,
-    ) -> Self {
+impl InclusionListsByIndicesRequestItems {
+    pub fn new(request: InclusionListsByIndicesRequestParams) -> Self {
         Self {
             request,
-            validator_indices: requested_validator_indices,
             items: vec![],
         }
     }
 }
 
-impl<E: EthSpec> ActiveRequestItems for InclusionListsByIndicesRequestItems<E> {
+impl ActiveRequestItems for InclusionListsByIndicesRequestItems {
     type Item = Arc<SignedInclusionList>;
 
     /// Appends a chunk to this multi-item request. Returns `true` once an inclusion list has been
@@ -41,7 +62,12 @@ impl<E: EthSpec> ActiveRequestItems for InclusionListsByIndicesRequestItems<E> {
         }
 
         let validator_index = inclusion_list.message.validator_index;
-        if !self.validator_indices.contains(&validator_index) {
+        if !self
+            .request
+            .requested
+            .iter()
+            .any(|(_, requested)| *requested == validator_index)
+        {
             return Err(LookupVerifyError::UnrequestedIndex(validator_index));
         }
 
@@ -54,7 +80,7 @@ impl<E: EthSpec> ActiveRequestItems for InclusionListsByIndicesRequestItems<E> {
         }
 
         self.items.push(inclusion_list);
-        Ok(self.items.len() >= self.validator_indices.len())
+        Ok(self.items.len() >= self.request.requested.len())
     }
 
     fn consume(&mut self) -> Vec<Self::Item> {
@@ -66,10 +92,7 @@ impl<E: EthSpec> ActiveRequestItems for InclusionListsByIndicesRequestItems<E> {
 mod tests {
     use super::*;
     use bls::Signature;
-    use types::{
-        Hash256, InclusionList, InclusionListBits, MinimalEthSpec as E, ProgressiveTransactions,
-        Slot,
-    };
+    use types::{InclusionList, MinimalEthSpec as E, ProgressiveTransactions};
 
     const SLOT: Slot = Slot::new(1);
     const DEPENDENT_ROOT: Hash256 = Hash256::repeat_byte(1);
@@ -92,17 +115,12 @@ mod tests {
 
     /// Build the request items corresponding to validators 10, 11, and 12
     /// at inclusion list committee positions 0, 1 and 2.
-    fn request_items() -> InclusionListsByIndicesRequestItems<E> {
-        let mut indices = InclusionListBits::<E>::new();
-        for position in 0..3 {
-            indices.set(position, true).unwrap();
-        }
-        let request = InclusionListsByIndicesRequest {
+    fn request_items() -> InclusionListsByIndicesRequestItems {
+        InclusionListsByIndicesRequestItems::new(InclusionListsByIndicesRequestParams {
             slot: SLOT,
             dependent_root: DEPENDENT_ROOT,
-            indices,
-        };
-        InclusionListsByIndicesRequestItems::new(request, vec![10, 11, 12])
+            requested: vec![(0, 10), (1, 11), (2, 12)],
+        })
     }
 
     #[test]
@@ -156,5 +174,34 @@ mod tests {
             items.add(inclusion_list(SLOT, DEPENDENT_ROOT, 10)),
             Err(LookupVerifyError::DuplicatedData(SLOT, 10))
         );
+    }
+
+    #[test]
+    fn try_into_request_sets_the_requested_positions() {
+        let params = InclusionListsByIndicesRequestParams {
+            slot: SLOT,
+            dependent_root: DEPENDENT_ROOT,
+            requested: vec![(0, 10), (5, 11)],
+        };
+        let request = params.clone().try_into_request::<E>().unwrap();
+        assert_eq!(request.slot, SLOT);
+        assert_eq!(request.dependent_root, DEPENDENT_ROOT);
+        assert_eq!(
+            request
+                .indices
+                .iter()
+                .enumerate()
+                .filter(|(_, is_set)| *is_set)
+                .map(|(position, _)| position)
+                .collect::<Vec<_>>(),
+            vec![0, 5]
+        );
+
+        // There are only 16 inclusion list committee positions
+        let out_of_range = InclusionListsByIndicesRequestParams {
+            requested: vec![(16, 10)],
+            ..params
+        };
+        assert!(out_of_range.try_into_request::<E>().is_err());
     }
 }
