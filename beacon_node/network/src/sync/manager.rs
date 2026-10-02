@@ -136,6 +136,13 @@ pub enum SyncMessage<E: EthSpec> {
         envelope: Option<Arc<SignedExecutionPayloadEnvelope<E>>>,
     },
 
+    /// An inclusion list has been received from the RPC.
+    RpcInclusionList {
+        sync_request_id: SyncRequestId,
+        peer_id: PeerId,
+        inclusion_list: Option<Arc<SignedInclusionList>>,
+    },
+
     /// A block with an unknown parent has been received.
     UnknownParentBlock(PeerId, Arc<SignedBeaconBlock<E>>, Hash256),
 
@@ -857,6 +864,11 @@ impl<T: BeaconChainTypes> SyncManager<T> {
                 peer_id,
                 envelope,
             } => self.rpc_payload_envelope_received(sync_request_id, peer_id, envelope),
+            SyncMessage::RpcInclusionList {
+                sync_request_id,
+                peer_id,
+                inclusion_list,
+            } => self.rpc_inclusion_list_received(sync_request_id, peer_id, inclusion_list),
             SyncMessage::UnknownParentBlock(peer_id, block, block_root) => {
                 let block_slot = block.slot();
                 let parent_root = block.parent_root();
@@ -1256,6 +1268,25 @@ impl<T: BeaconChainTypes> SyncManager<T> {
         }
     }
 
+    fn rpc_inclusion_list_received(
+        &mut self,
+        sync_request_id: SyncRequestId,
+        peer_id: PeerId,
+        inclusion_list: Option<Arc<SignedInclusionList>>,
+    ) {
+        match sync_request_id {
+            SyncRequestId::InclusionListsByIndices { id } => self
+                .on_inclusion_lists_by_indices_response(
+                    id,
+                    peer_id,
+                    RpcEvent::from_chunk(inclusion_list),
+                ),
+            _ => {
+                crit!(%peer_id, "bad request id for inclusion list");
+            }
+        }
+    }
+
     fn on_single_payload_envelope_response(
         &mut self,
         id: SingleLookupReqId,
@@ -1502,6 +1533,15 @@ impl<T: BeaconChainTypes> SyncManager<T> {
         peer_id: PeerId,
         inclusion_list: RpcEvent<Arc<SignedInclusionList>>,
     ) {
-        todo!()
+        if let Some(Ok(inclusion_lists)) =
+            self.network
+                .on_inclusion_lists_by_indices_response(request_id, peer_id, inclusion_list)
+        {
+            debug!(
+                %peer_id,
+                count = inclusion_lists.len(),
+                "Received inclusion lists by indices"
+            );
+        }
     }
 }

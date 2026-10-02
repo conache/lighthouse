@@ -58,7 +58,8 @@ use tokio::sync::mpsc;
 use tracing::{Span, debug, debug_span, error, warn};
 use types::{
     BlobSidecar, ChainSpec, ColumnIndex, DataColumnSidecar, DataColumnSidecarList, Epoch, EthSpec,
-    ForkContext, Hash256, SignedBeaconBlock, SignedExecutionPayloadEnvelope, Slot,
+    ForkContext, Hash256, SignedBeaconBlock, SignedExecutionPayloadEnvelope, SignedInclusionList,
+    Slot,
 };
 
 pub mod custody;
@@ -1512,6 +1513,18 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         self.on_rpc_response_result(resp, peer_id)
     }
 
+    pub(crate) fn on_inclusion_lists_by_indices_response(
+        &mut self,
+        id: InclusionListsByIndicesRequestId,
+        peer_id: PeerId,
+        rpc_event: RpcEvent<Arc<SignedInclusionList>>,
+    ) -> Option<RpcResponseResult<Vec<Arc<SignedInclusionList>>>> {
+        let resp = self
+            .inclusion_lists_by_indices_requests
+            .on_response(id, rpc_event);
+        self.on_rpc_response_result(resp, peer_id)
+    }
+
     /// Common handler for consistent scoring of RpcResponseError
     fn on_rpc_response_result<R>(
         &mut self,
@@ -1758,6 +1771,11 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
     #[cfg(test)]
     pub(crate) fn custody_backfill_batch_request_count(&self) -> usize {
         self.custody_backfill_data_column_batch_requests.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inclusion_lists_by_indices_request_count(&self) -> usize {
+        self.inclusion_lists_by_indices_requests.len()
     }
 
     #[cfg(test)]

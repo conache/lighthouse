@@ -21,8 +21,9 @@ use tokio::sync::mpsc;
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use types::{ForkName, Hash256, MinimalEthSpec as E, Slot};
+use types::{ForkName, Hash256, MinimalEthSpec as E, SignedInclusionList, Slot};
 
+mod inclusion_lists;
 mod lookups;
 mod range;
 
@@ -77,6 +78,8 @@ struct TestRig {
     /// Blocks that will be used in the test but may not be known to `harness` yet.
     network_blocks_by_root: HashMap<Hash256, RangeSyncBlock<E>>,
     network_blocks_by_slot: HashMap<Slot, RangeSyncBlock<E>>,
+    /// Inclusion lists that will be served by peers, indexed by inclusion list committee position.
+    network_inclusion_lists: Vec<Arc<SignedInclusionList>>,
     penalties: Vec<ReportedPenalty>,
     /// All seen lookups through the test run
     seen_lookups: HashMap<Id, SeenLookup>,
