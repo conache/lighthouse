@@ -73,7 +73,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace};
 use types::{
     BlobSidecar, DataColumnSidecar, EthSpec, ExecutionBlockHash, ForkContext, Hash256,
-    SignedBeaconBlock, SignedExecutionPayloadEnvelope, Slot,
+    SignedBeaconBlock, SignedExecutionPayloadEnvelope, SignedInclusionList, Slot,
 };
 
 /// The number of slots ahead of us that is allowed before requesting a long-range (batch)  Sync
@@ -520,6 +520,9 @@ impl<T: BeaconChainTypes> SyncManager<T> {
             }
             SyncRequestId::PayloadEnvelopesByRange(req_id) => self
                 .on_payload_envelopes_by_range_response(req_id, peer_id, RpcEvent::RPCError(error)),
+            SyncRequestId::InclusionListsByIndices { id } => {
+                self.on_inclusion_lists_by_indices_response(id, peer_id, RpcEvent::RPCError(error))
+            }
         }
     }
 
@@ -1490,5 +1493,15 @@ impl<T: BeaconChainTypes> SyncManager<T> {
                 }
             }
         }
+    }
+
+    /// Handles receiving a response for an inclusion lists by indices request.
+    fn on_inclusion_lists_by_indices_response(
+        &mut self,
+        request_id: Id,
+        peer_id: PeerId,
+        inclusion_list: RpcEvent<Arc<SignedInclusionList>>,
+    ) {
+        todo!()
     }
 }

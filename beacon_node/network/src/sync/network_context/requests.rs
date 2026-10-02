@@ -26,6 +26,7 @@ mod blocks_by_range;
 mod blocks_by_root;
 mod data_columns_by_range;
 mod data_columns_by_root;
+mod inclusion_lists_by_indices;
 mod payload_envelopes_by_range;
 mod payload_envelopes_by_root;
 
@@ -34,6 +35,7 @@ pub enum LookupVerifyError {
     NotEnoughResponsesReturned { actual: usize },
     TooManyResponses,
     UnrequestedBlockRoot(Hash256),
+    UnrequestedDependentRoot(Hash256),
     UnrequestedIndex(u64),
     UnrequestedSlot(Slot),
     InvalidInclusionProof,
