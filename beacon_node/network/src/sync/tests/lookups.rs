@@ -474,7 +474,8 @@ impl TestRig {
                     }
                     Work::RpcBlobs { process_fn }
                     | Work::RpcCustodyColumn(process_fn)
-                    | Work::RpcEnvelope(process_fn) => process_fn.await,
+                    | Work::RpcEnvelope(process_fn)
+                    | Work::RpcInclusionLists(process_fn) => process_fn.await,
                     Work::ChainSegment {
                         process_fn,
                         process_id: (chain_id, batch_epoch),

@@ -1675,6 +1675,29 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
             })
     }
 
+    pub fn send_inclusion_lists_for_processing(
+        &self,
+        peer_id: PeerId,
+        inclusion_lists: Vec<Arc<SignedInclusionList>>,
+    ) -> Result<(), SendErrorProcessor> {
+        let beacon_processor = self
+            .beacon_processor_if_enabled()
+            .ok_or(SendErrorProcessor::ProcessorNotAvailable)?;
+
+        debug!(
+            %peer_id,
+            count = inclusion_lists.len(),
+            "Sending inclusion lists for processing"
+        );
+
+        beacon_processor
+            .send_rpc_inclusion_lists(peer_id, inclusion_lists)
+            .map_err(|e| {
+                error!(error = ?e, "Failed to send sync inclusion lists to processor");
+                SendErrorProcessor::SendError
+            })
+    }
+
     pub fn send_custody_columns_for_processing(
         &self,
         _id: Id,

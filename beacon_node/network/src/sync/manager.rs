@@ -1655,15 +1655,19 @@ impl<T: BeaconChainTypes> SyncManager<T> {
         peer_id: PeerId,
         inclusion_list: RpcEvent<Arc<SignedInclusionList>>,
     ) {
-        if let Some(Ok(inclusion_lists)) =
-            self.network
-                .on_inclusion_lists_by_indices_response(request_id, peer_id, inclusion_list)
+        let Some(Ok(inclusion_lists)) = self.network.on_inclusion_lists_by_indices_response(
+            request_id,
+            peer_id,
+            inclusion_list,
+        ) else {
+            return;
+        };
+
+        if let Err(e) = self
+            .network
+            .send_inclusion_lists_for_processing(peer_id, inclusion_lists)
         {
-            debug!(
-                %peer_id,
-                count = inclusion_lists.len(),
-                "Received inclusion lists by indices"
-            );
+            debug!(%peer_id, error = ?e, "Failed to send inclusion lists for processing");
         }
     }
 }

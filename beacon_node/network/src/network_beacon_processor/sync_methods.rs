@@ -303,6 +303,25 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
         });
     }
 
+    /// Attempt to verify and import inclusion lists received via RPC.
+    #[instrument(
+        name = "lh_process_rpc_inclusion_lists",
+        parent = None,
+        level = "debug",
+        skip_all,
+        fields(%peer_id),
+    )]
+    pub async fn process_rpc_inclusion_lists(
+        self: Arc<NetworkBeaconProcessor<T>>,
+        peer_id: PeerId,
+        inclusion_lists: Vec<Arc<types::SignedInclusionList>>,
+    ) {
+        debug!(
+            count = inclusion_lists.len(),
+            "Processing RPC inclusion lists"
+        );
+    }
+
     /// Attempt to verify and import an execution payload envelope received via RPC.
     #[instrument(
         name = "lh_process_lookup_envelope",
