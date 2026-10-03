@@ -1861,6 +1861,10 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
                 "components_by_range",
                 self.components_by_range_requests.len(),
             ),
+            (
+                "inclusion_lists_by_indices",
+                self.inclusion_lists_by_indices_requests.len(),
+            ),
         ] {
             metrics::set_gauge_vec(&metrics::SYNC_ACTIVE_NETWORK_REQUESTS, &[id], count as i64);
         }
