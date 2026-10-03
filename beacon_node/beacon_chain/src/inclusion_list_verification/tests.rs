@@ -65,6 +65,12 @@ impl TestContext {
             .inclusion_list_gossip_verification_context(InclusionListSource::Gossip)
     }
 
+    fn rpc_ctx(&self) -> GossipVerificationContext<'_, T> {
+        self.harness
+            .chain
+            .inclusion_list_gossip_verification_context(InclusionListSource::Rpc)
+    }
+
     fn current_slot(&self) -> Slot {
         self.harness.chain.slot().expect("should read slot")
     }
@@ -376,5 +382,59 @@ async fn dependent_root_must_be_the_shuffling_dependent_block() {
     assert!(matches!(
         result,
         Err(InclusionListVerificationError::InvalidDependentRoot { .. })
+    ));
+}
+
+#[test]
+fn rpc_list_already_seen_twice_is_verified() {
+    if !fork_name_from_env().is_some_and(|f| f.gloas_enabled()) {
+        return;
+    }
+    let ctx = TestContext::new();
+    let slot = ctx.current_slot();
+
+    for tx in [0xaa, 0xbb] {
+        let signed = ctx.valid_inclusion_list(slot, ctx.genesis_block_root, vec![vec![tx]]);
+        let verified = GossipVerifiedInclusionList::new(signed, &ctx.gossip_ctx())
+            .expect("should verify inclusion list");
+        ctx.harness.chain.import_inclusion_list(verified);
+    }
+
+    let signed = ctx.valid_inclusion_list(slot, ctx.genesis_block_root, vec![vec![0xcc]]);
+    assert!(GossipVerifiedInclusionList::new(signed, &ctx.rpc_ctx()).is_ok());
+}
+
+#[test]
+fn rpc_list_within_retention_window() {
+    if !fork_name_from_env().is_some_and(|f| f.gloas_enabled()) {
+        return;
+    }
+    let ctx = TestContext::new();
+    let slot = ctx.current_slot();
+    let signed = ctx.valid_inclusion_list(slot, ctx.genesis_block_root, vec![vec![0xaa]]);
+
+    let spec = &ctx.harness.spec;
+    let last_retained_slot = slot + spec.min_slots_for_inclusion_lists_requests;
+    let first_unretained_slot = last_retained_slot + 1;
+
+    // Move past the gossip clock disparity into the last retained slot.
+    let last_retained_slot_start = spec.get_slot_duration() * last_retained_slot.as_u64() as u32;
+    ctx.harness
+        .chain
+        .slot_clock
+        .set_current_time(last_retained_slot_start + spec.maximum_gossip_clock_disparity());
+    assert!(matches!(
+        GossipVerifiedInclusionList::new(signed.clone(), &ctx.gossip_ctx()),
+        Err(InclusionListVerificationError::PastSlot { .. })
+    ));
+    assert!(GossipVerifiedInclusionList::new(signed.clone(), &ctx.rpc_ctx()).is_ok());
+
+    ctx.harness
+        .chain
+        .slot_clock
+        .set_slot(first_unretained_slot.as_u64());
+    assert!(matches!(
+        GossipVerifiedInclusionList::new(signed, &ctx.rpc_ctx()),
+        Err(InclusionListVerificationError::PastSlot { .. })
     ));
 }
