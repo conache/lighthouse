@@ -52,6 +52,7 @@ use crate::sync::network_context::{
     RpcResponseResult,
 };
 use beacon_chain::block_verification_types::AsBlock;
+use beacon_chain::inclusion_list_store::DependentRoot;
 use beacon_chain::{BeaconChain, BeaconChainTypes, EngineState};
 use futures::StreamExt;
 use lighthouse_network::SyncInfo;
@@ -919,7 +920,7 @@ impl<T: BeaconChainTypes> SyncManager<T> {
     fn get_missing_inclusion_lists(
         &self,
         slot: Slot,
-    ) -> Option<(Hash256, InclusionListCommitteePositions)> {
+    ) -> Option<(DependentRoot, InclusionListCommitteePositions)> {
         let head_block_root = self.chain.canonical_head.cached_head().head_block_root();
 
         let (committee, dependent_root) = self

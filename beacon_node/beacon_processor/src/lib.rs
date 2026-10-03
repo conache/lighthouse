@@ -859,8 +859,6 @@ impl<E: EthSpec> BeaconProcessor<E> {
                             Some(item)
                         } else if let Some(item) = work_queues.rpc_envelope_queue.pop() {
                             Some(item)
-                        } else if let Some(item) = work_queues.rpc_inclusion_lists_queue.pop() {
-                            Some(item)
                         // Check delayed blocks before gossip blocks, the gossip blocks might rely
                         // on the delayed ones.
                         } else if let Some(item) = work_queues.delayed_block_queue.pop() {
@@ -1008,6 +1006,8 @@ impl<E: EthSpec> BeaconProcessor<E> {
                             Some(item)
                         // Check inclusion lists next, they also influence fork choice.
                         } else if let Some(item) = work_queues.gossip_inclusion_list_queue.pop() {
+                            Some(item)
+                        } else if let Some(item) = work_queues.rpc_inclusion_lists_queue.pop() {
                             Some(item)
                         // Check sync committee messages after attestations as their rewards are lesser
                         // and they don't influence fork choice.

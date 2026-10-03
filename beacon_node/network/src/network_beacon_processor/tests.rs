@@ -3261,18 +3261,28 @@ async fn test_rpc_inclusion_list_is_imported() {
         .send_rpc_inclusion_lists(junk_peer_id(), vec![Arc::new(inclusion_list.clone())])
         .unwrap();
 
-    assert!(
-        rig.receive_network_messages_with_timeout(Duration::from_millis(500), None)
-            .await
-            .is_none(),
-        "a valid list should not penalize the peer"
-    );
-    assert_eq!(
+    let stored_inclusion_lists = || {
         rig.chain
             .inclusion_list_store
             .read()
-            .get_signed_inclusion_lists(slot, dependent_root, &[validator_index]),
-        vec![inclusion_list]
+            .get_signed_inclusion_lists(slot, dependent_root, &[validator_index])
+    };
+    let result = tokio::time::timeout(STANDARD_TIMEOUT, async {
+        while stored_inclusion_lists().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(
+        result.is_ok(),
+        "timed out waiting for the list to be imported"
+    );
+    assert_eq!(stored_inclusion_lists(), vec![inclusion_list]);
+    assert!(
+        rig.receive_network_messages_with_timeout(Duration::from_millis(100), None)
+            .await
+            .is_none(),
+        "a valid list should not penalize the peer"
     );
 }
 
