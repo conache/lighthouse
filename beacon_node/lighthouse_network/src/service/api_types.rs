@@ -36,7 +36,7 @@ pub enum SyncRequestId {
     DataColumnsByRange(DataColumnsByRangeRequestId),
     /// Payload envelopes by range request
     PayloadEnvelopesByRange(PayloadEnvelopesByRangeRequestId),
-    /// Inclusion Lists by indices request
+    /// Inclusion lists by indices request
     InclusionListsByIndices {
         id: InclusionListsByIndicesRequestId,
     },

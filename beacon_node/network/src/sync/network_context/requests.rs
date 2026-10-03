@@ -13,7 +13,8 @@ pub use blocks_by_root::{BlocksByRootRequestItems, BlocksByRootSingleRequest};
 pub use data_columns_by_range::DataColumnsByRangeRequestItems;
 pub use data_columns_by_root::{DataColumnsByRootRequestItems, DataColumnsByRootRequestParams};
 pub use inclusion_lists_by_indices::{
-    InclusionListsByIndicesRequestItems, InclusionListsByIndicesRequestParams,
+    InclusionListCommitteePositions, InclusionListsByIndicesRequestItems,
+    InclusionListsByIndicesRequestParams,
 };
 pub use payload_envelopes_by_range::PayloadEnvelopesByRangeRequestItems;
 pub use payload_envelopes_by_root::{

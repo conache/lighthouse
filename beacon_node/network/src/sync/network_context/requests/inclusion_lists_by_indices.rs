@@ -1,8 +1,12 @@
 use lighthouse_network::rpc::methods::InclusionListsByIndicesRequest;
+use std::collections::HashSet;
 use std::sync::Arc;
 use types::{EthSpec, Hash256, InclusionListBits, SignedInclusionList, Slot};
 
 use super::{ActiveRequestItems, LookupVerifyError};
+
+/// Inclusion list committee positions, each with the validator at that position.
+pub type InclusionListCommitteePositions = Vec<(usize, u64)>;
 
 #[derive(Debug, Clone)]
 pub struct InclusionListsByIndicesRequestParams {
@@ -10,7 +14,7 @@ pub struct InclusionListsByIndicesRequestParams {
     pub dependent_root: Hash256,
     /// Requested inclusion list committee positions, each with the validator index
     /// corresponding to that position.
-    pub requested: Vec<(usize, u64)>,
+    pub requested: InclusionListCommitteePositions,
 }
 
 impl InclusionListsByIndicesRequestParams {
@@ -33,13 +37,22 @@ impl InclusionListsByIndicesRequestParams {
 
 pub struct InclusionListsByIndicesRequestItems {
     request: InclusionListsByIndicesRequestParams,
+    /// Distinct validators in `request`: a validator holding multiple inclusion list
+    /// committee positions is served a single list.
+    requested_validators: HashSet<u64>,
     items: Vec<Arc<SignedInclusionList>>,
 }
 
 impl InclusionListsByIndicesRequestItems {
     pub fn new(request: InclusionListsByIndicesRequestParams) -> Self {
+        let requested_validators = request
+            .requested
+            .iter()
+            .map(|(_, validator_index)| *validator_index)
+            .collect();
         Self {
             request,
+            requested_validators,
             items: vec![],
         }
     }
@@ -62,12 +75,7 @@ impl ActiveRequestItems for InclusionListsByIndicesRequestItems {
         }
 
         let validator_index = inclusion_list.message.validator_index;
-        if !self
-            .request
-            .requested
-            .iter()
-            .any(|(_, requested)| *requested == validator_index)
-        {
+        if !self.requested_validators.contains(&validator_index) {
             return Err(LookupVerifyError::UnrequestedIndex(validator_index));
         }
 
@@ -80,7 +88,8 @@ impl ActiveRequestItems for InclusionListsByIndicesRequestItems {
         }
 
         self.items.push(inclusion_list);
-        Ok(self.items.len() >= self.request.requested.len())
+
+        Ok(self.items.len() >= self.requested_validators.len())
     }
 
     fn consume(&mut self) -> Vec<Self::Item> {
@@ -173,6 +182,24 @@ mod tests {
         assert_eq!(
             items.add(inclusion_list(SLOT, DEPENDENT_ROOT, 10)),
             Err(LookupVerifyError::DuplicatedData(SLOT, 10))
+        );
+    }
+
+    #[test]
+    fn validator_holding_several_positions_completes_with_one_list() {
+        let mut items =
+            InclusionListsByIndicesRequestItems::new(InclusionListsByIndicesRequestParams {
+                slot: SLOT,
+                dependent_root: DEPENDENT_ROOT,
+                requested: vec![(0, 10), (1, 10), (2, 11)],
+            });
+        assert_eq!(
+            items.add(inclusion_list(SLOT, DEPENDENT_ROOT, 10)),
+            Ok(false)
+        );
+        assert_eq!(
+            items.add(inclusion_list(SLOT, DEPENDENT_ROOT, 11)),
+            Ok(true)
         );
     }
 

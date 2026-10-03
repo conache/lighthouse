@@ -47,7 +47,10 @@ use crate::service::NetworkMessage;
 use crate::status::ToStatusMessage;
 use crate::sync::block_lookups::{BlockComponent, DownloadResult};
 use crate::sync::custody_backfill_sync::CustodyBackFillSync;
-use crate::sync::network_context::{PeerGroup, RpcResponseResult};
+use crate::sync::network_context::{
+    InclusionListCommitteePositions, InclusionListsByIndicesRequestParams, PeerGroup,
+    RpcResponseResult,
+};
 use beacon_chain::block_verification_types::AsBlock;
 use beacon_chain::{BeaconChain, BeaconChainTypes, EngineState};
 use futures::StreamExt;
@@ -795,6 +798,11 @@ impl<T: BeaconChainTypes> SyncManager<T> {
             self.chain.slot_clock.slot_duration().as_secs() * T::EthSpec::slots_per_epoch();
         let mut epoch_interval = tokio::time::interval(Duration::from_secs(epoch_duration));
 
+        // Fires at the inclusion list deadline of every slot to request missing inclusion lists.
+        let inclusion_list_deadline =
+            tokio::time::sleep(self.duration_to_next_inclusion_list_deadline());
+        tokio::pin!(inclusion_list_deadline);
+
         // process any inbound messages
         loop {
             tokio::select! {
@@ -819,8 +827,122 @@ impl<T: BeaconChainTypes> SyncManager<T> {
                 _ = epoch_interval.tick() => {
                     self.update_sync_state();
                 }
+                _ = &mut inclusion_list_deadline => {
+                    self.on_inclusion_list_deadline().await;
+                    inclusion_list_deadline.as_mut().reset(
+                        tokio::time::Instant::now() + self.duration_to_next_inclusion_list_deadline(),
+                    );
+                }
             }
         }
+    }
+
+    /// Time until the inclusion list deadline of the next slot.
+    fn duration_to_next_inclusion_list_deadline(&self) -> Duration {
+        let slot_clock = &self.chain.slot_clock;
+        slot_clock
+            .duration_to_next_slot()
+            .unwrap_or_else(|| slot_clock.slot_duration())
+            + self.chain.spec.get_inclusion_list_due()
+    }
+
+    /// Requests the inclusion lists this node is missing for the current slot when one of its
+    /// validators proposes the next slot, so the proposer can include their transactions.
+    pub(crate) async fn on_inclusion_list_deadline(&mut self) {
+        if !self.network_globals().sync_state.read().is_synced() {
+            return;
+        }
+
+        let Ok(slot) = self.chain.slot() else {
+            return;
+        };
+
+        if !self
+            .chain
+            .spec
+            .fork_name_at_slot::<T::EthSpec>(slot)
+            .heze_enabled()
+        {
+            return;
+        }
+
+        if !self.has_proposer_at(slot + 1).await {
+            return;
+        }
+
+        let Some((dependent_root, requested)) = self.get_missing_inclusion_lists(slot) else {
+            return;
+        };
+
+        if requested.is_empty() {
+            return;
+        }
+
+        let request = InclusionListsByIndicesRequestParams {
+            slot,
+            dependent_root,
+            requested,
+        };
+        if let Err(e) = self.network.inclusion_lists_by_indices_request(request) {
+            debug!(%slot, error = ?e, "Failed to request inclusion lists");
+        }
+    }
+
+    /// Returns whether this node has one of its validators proposing at `slot`.
+    async fn has_proposer_at(&self, slot: Slot) -> bool {
+        let cached_head = self.chain.canonical_head.cached_head();
+        let head_state = &cached_head.snapshot.beacon_state;
+
+        let Some(proposer_index) = head_state.proposer_lookahead().ok().and_then(|lookahead| {
+            let current_epoch_start_slot = head_state
+                .current_epoch()
+                .start_slot(T::EthSpec::slots_per_epoch());
+            let offset = slot
+                .as_usize()
+                .checked_sub(current_epoch_start_slot.as_usize())?;
+            lookahead.get(offset).copied()
+        }) else {
+            return false;
+        };
+
+        let Some(execution_layer) = self.chain.execution_layer.as_ref() else {
+            return false;
+        };
+        execution_layer
+            .has_proposer_preparation_data(proposer_index)
+            .await
+    }
+
+    /// The inclusion list committee positions at `slot` whose inclusion list this node has not
+    /// observed yet, each with the validator at that position, and the dependent root of the
+    /// inclusion list committee.
+    fn get_missing_inclusion_lists(
+        &self,
+        slot: Slot,
+    ) -> Option<(Hash256, InclusionListCommitteePositions)> {
+        let head_block_root = self.chain.canonical_head.cached_head().head_block_root();
+
+        let (committee, dependent_root) = self
+            .chain
+            .inclusion_list_committee(head_block_root, slot)
+            .inspect_err(
+                |e| debug!(%slot, error = ?e, "Unable to read the inclusion list committee"),
+            )
+            .ok()?;
+        let observed = self
+            .chain
+            .get_inclusion_list_bits(head_block_root, slot, false)
+            .inspect_err(|e| debug!(%slot, error = ?e, "Unable to read the inclusion list bits"))
+            .ok()?;
+
+        let missing = committee
+            .iter()
+            .enumerate()
+            .filter(|(position, _)| !observed.get(*position).unwrap_or(false))
+            .map(|(position, validator_index)| (position, *validator_index))
+            .collect();
+
+        Some((dependent_root, missing))
     }
 
     pub(crate) fn handle_message(&mut self, sync_message: SyncMessage<T::EthSpec>) {

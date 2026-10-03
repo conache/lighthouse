@@ -3,7 +3,7 @@
 
 use self::custody::{ActiveCustodyRequest, Error as CustodyRequestError};
 pub use self::requests::{
-    BlocksByRootSingleRequest, DataColumnsByRootRequestParams,
+    BlocksByRootSingleRequest, DataColumnsByRootRequestParams, InclusionListCommitteePositions,
     InclusionListsByIndicesRequestParams, PayloadEnvelopesByRootSingleRequest,
 };
 use super::SyncMessage;
@@ -145,6 +145,7 @@ pub enum RpcRequestSendError {
 pub enum NoPeerError {
     BlockPeer,
     CustodyPeer(ColumnIndex),
+    InclusionListPeer,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1238,13 +1239,39 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         Ok(id)
     }
 
-    pub fn send_inclusion_lists_by_indices_request(
+    /// Requests inclusion lists from a synced peer.
+    pub fn inclusion_lists_by_indices_request(
         &mut self,
-        peer_id: PeerId,
         request: InclusionListsByIndicesRequestParams,
-        request_span: Span,
     ) -> Result<InclusionListsByIndicesRequestId, RpcRequestSendError> {
+        let inclusion_lists_by_indices_per_peer =
+            ActiveRequestsPerPeer::new(&self.inclusion_lists_by_indices_requests);
+        let Some(peer_id) = self
+            .network_globals()
+            .peers
+            .read()
+            .synced_peers()
+            .map(|peer| {
+                (
+                    // Strictly de-prioritize peers already at the per-protocol concurrency limit
+                    inclusion_lists_by_indices_per_peer.at_concurrency_limit(peer),
+                    // Random factor to break ties, otherwise the PeerID breaks ties
+                    rand::random::<u32>(),
+                    *peer,
+                )
+            })
+            .min()
+            .map(|(_, _, peer)| peer)
+        else {
+            return Err(RpcRequestSendError::NoPeer(NoPeerError::InclusionListPeer));
+        };
+
         let id = self.next_id();
+        let request_span = debug_span!(
+            parent: None,
+            "lh_outgoing_inclusion_lists_by_indices_request",
+            slot = %request.slot,
+        );
 
         self.send_network_msg(NetworkMessage::SendRequest {
             peer_id,
@@ -1270,7 +1297,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
             requested = ?request.requested,
             peer = %peer_id,
             %id,
-            "Inclusion lists by indices RPC request sent"
+            "Sync RPC request sent"
         );
 
         self.inclusion_lists_by_indices_requests.insert(

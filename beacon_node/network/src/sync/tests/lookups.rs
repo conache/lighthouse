@@ -1709,6 +1709,10 @@ impl TestRig {
         genesis_fork().gloas_enabled().then(Self::default)
     }
 
+    pub(super) fn new_after_heze() -> Option<Self> {
+        genesis_fork().heze_enabled().then(Self::default)
+    }
+
     pub fn new_fulu_peer_test(fulu_test_type: FuluTestType) -> Option<Self> {
         genesis_fork().fulu_enabled().then(|| {
             Self::new(TestRigConfig {
