@@ -40,7 +40,7 @@ use tracing::info;
 use types::{
     BlobSidecar, BlockImportSource, ColumnIndex, DataColumnSidecar, DataColumnSubnetId,
     ForkContext, ForkName, Hash256, MinimalEthSpec as E, SignedBeaconBlock,
-    SignedExecutionPayloadEnvelope, Slot,
+    SignedExecutionPayloadEnvelope, SignedInclusionList, Slot,
 };
 
 /// Extract the Gloas payload envelope (if any) carried by a stored `RangeSyncBlock`.
@@ -103,6 +103,8 @@ pub struct SimulateConfig {
     ee_offline_for_n_range_responses: Option<usize>,
     /// Disconnect all peers after this many successful BlocksByRange responses.
     successful_range_responses_before_disconnect: Option<usize>,
+    /// Number of InclusionListsByIndices requests that return inclusion lists for another slot
+    return_wrong_inclusion_list_slot_n_times: usize,
 }
 
 impl SimulateConfig {
@@ -227,6 +229,11 @@ impl SimulateConfig {
         self.successful_range_responses_before_disconnect = Some(n);
         self
     }
+
+    pub(super) fn with_wrong_inclusion_list_slot_n_times(mut self, n: usize) -> Self {
+        self.return_wrong_inclusion_list_slot_n_times = n;
+        self
+    }
 }
 
 fn genesis_fork() -> ForkName {
@@ -340,6 +347,7 @@ impl TestRig {
             fork_name,
             network_blocks_by_root: <_>::default(),
             network_blocks_by_slot: <_>::default(),
+            network_inclusion_lists: <_>::default(),
             penalties: <_>::default(),
             seen_lookups: <_>::default(),
             requests: <_>::default(),
@@ -466,7 +474,8 @@ impl TestRig {
                     }
                     Work::RpcBlobs { process_fn }
                     | Work::RpcCustodyColumn(process_fn)
-                    | Work::RpcEnvelope(process_fn) => process_fn.await,
+                    | Work::RpcEnvelope(process_fn)
+                    | Work::RpcInclusionLists(process_fn) => process_fn.await,
                     Work::ChainSegment {
                         process_fn,
                         process_id: (chain_id, batch_epoch),
@@ -860,6 +869,36 @@ impl TestRig {
                 self.send_rpc_envelopes_response(req_id, peer_id, &envelopes);
             }
 
+            (RequestType::InclusionListsByIndices(req), AppRequestId::Sync(req_id)) => {
+                // Serve one list per validator; a validator can hold several committee positions.
+                let mut served_validators = HashSet::new();
+                let mut inclusion_lists = req
+                    .indices
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, requested)| *requested)
+                    .filter_map(|(position, _)| self.network_inclusion_lists.get(position).cloned())
+                    .filter(|inclusion_list| {
+                        served_validators.insert(inclusion_list.message.validator_index)
+                    })
+                    .collect::<Vec<_>>();
+
+                // Return lists for another slot N times
+                if self
+                    .complete_strategy
+                    .return_wrong_inclusion_list_slot_n_times
+                    > 0
+                {
+                    self.complete_strategy
+                        .return_wrong_inclusion_list_slot_n_times -= 1;
+                    for inclusion_list in &mut inclusion_lists {
+                        Arc::make_mut(inclusion_list).message.slot += 1;
+                    }
+                }
+
+                self.send_rpc_inclusion_lists_response(req_id, peer_id, &inclusion_lists);
+            }
+
             (RequestType::Status(_req), AppRequestId::Router) => {
                 // Ignore Status requests for now
             }
@@ -977,6 +1016,35 @@ impl TestRig {
             sync_request_id,
             peer_id,
             envelope: None,
+        });
+    }
+
+    fn send_rpc_inclusion_lists_response(
+        &mut self,
+        sync_request_id: SyncRequestId,
+        peer_id: PeerId,
+        inclusion_lists: &[Arc<SignedInclusionList>],
+    ) {
+        let validators = inclusion_lists
+            .iter()
+            .map(|inclusion_list| inclusion_list.message.validator_index)
+            .collect::<Vec<_>>();
+        self.log(&format!(
+            "Completing request {sync_request_id:?} to {peer_id} with inclusion lists from validators {validators:?}"
+        ));
+
+        for inclusion_list in inclusion_lists {
+            self.push_sync_message(SyncMessage::RpcInclusionList {
+                sync_request_id,
+                peer_id,
+                inclusion_list: Some(inclusion_list.clone()),
+            });
+        }
+        // Stream termination
+        self.push_sync_message(SyncMessage::RpcInclusionList {
+            sync_request_id,
+            peer_id,
+            inclusion_list: None,
         });
     }
 
@@ -1645,6 +1713,10 @@ impl TestRig {
 
     fn new_after_gloas() -> Option<Self> {
         genesis_fork().gloas_enabled().then(Self::default)
+    }
+
+    pub(super) fn new_after_heze() -> Option<Self> {
+        genesis_fork().heze_enabled().then(Self::default)
     }
 
     pub fn new_fulu_peer_test(fulu_test_type: FuluTestType) -> Option<Self> {

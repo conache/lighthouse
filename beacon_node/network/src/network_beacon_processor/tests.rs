@@ -3227,3 +3227,96 @@ async fn test_gossip_inclusion_list_propagation_follows_the_store_outcome() {
         }
     }
 }
+
+// A valid list fetched over RPC is imported into the store without penalizing the peer.
+#[tokio::test]
+async fn test_rpc_inclusion_list_is_imported() {
+    let mut rig = TestRig::new(SMALL_CHAIN).await;
+    let slot = rig.chain.slot().unwrap();
+    let (committee, dependent_root) = rig
+        .chain
+        .inclusion_list_committee(rig.chain.head_beacon_block_root(), slot)
+        .unwrap();
+    let validator_index = committee[0];
+
+    let message = InclusionList {
+        slot,
+        validator_index,
+        dependent_root,
+        transactions: vec![vec![0xaa].try_into().unwrap()].try_into().unwrap(),
+    };
+    let epoch = slot.epoch(E::slots_per_epoch());
+    let domain = rig.chain.spec.get_domain(
+        epoch,
+        Domain::InclusionListCommittee,
+        &rig.chain.spec.fork_at_epoch(epoch),
+        rig.chain.genesis_validators_root,
+    );
+    let signature = rig._harness.validator_keypairs[validator_index as usize]
+        .sk
+        .sign(message.signing_root(domain));
+    let inclusion_list = SignedInclusionList { message, signature };
+
+    rig.network_beacon_processor
+        .send_rpc_inclusion_lists(junk_peer_id(), vec![Arc::new(inclusion_list.clone())])
+        .unwrap();
+
+    let stored_inclusion_lists = || {
+        rig.chain
+            .inclusion_list_store
+            .read()
+            .get_signed_inclusion_lists(slot, dependent_root, &[validator_index])
+    };
+    let result = tokio::time::timeout(STANDARD_TIMEOUT, async {
+        while stored_inclusion_lists().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(
+        result.is_ok(),
+        "timed out waiting for the list to be imported"
+    );
+    assert_eq!(stored_inclusion_lists(), vec![inclusion_list]);
+    assert!(
+        rig.receive_network_messages_with_timeout(Duration::from_millis(100), None)
+            .await
+            .is_none(),
+        "a valid list should not penalize the peer"
+    );
+}
+
+// A list fetched over RPC from a validator outside the committee
+// penalizes the peer and is not imported.
+#[tokio::test]
+async fn test_rpc_inclusion_list_outside_the_committee_penalizes_the_peer() {
+    let mut rig = TestRig::new(SMALL_CHAIN).await;
+    let slot = rig.chain.slot().unwrap();
+    let (_, dependent_root) = rig
+        .chain
+        .inclusion_list_committee(rig.chain.head_beacon_block_root(), slot)
+        .unwrap();
+    let validator_index = u64::MAX;
+    let inclusion_list = signed_inclusion_list(slot, validator_index, dependent_root, 0xaa);
+
+    rig.network_beacon_processor
+        .send_rpc_inclusion_lists(junk_peer_id(), vec![Arc::new(inclusion_list)])
+        .unwrap();
+
+    let network_message = rig
+        .receive_network_messages_with_timeout(Duration::from_secs(1), Some(1))
+        .await
+        .and_then(|mut messages| messages.pop())
+        .expect("should penalize the peer");
+    match network_message {
+        NetworkMessage::ReportPeer { msg, .. } => assert_eq!(msg, "invalid_rpc_inclusion_list"),
+        other => panic!("expected ReportPeer, got {:?}", other),
+    }
+    assert!(
+        rig.chain
+            .inclusion_list_store
+            .read()
+            .get_signed_inclusion_lists(slot, dependent_root, &[validator_index])
+            .is_empty()
+    );
+}

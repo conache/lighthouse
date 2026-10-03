@@ -1,5 +1,6 @@
 use crate::metrics::{self, register_process_result_metrics};
 use crate::network_beacon_processor::{FUTURE_SLOT_TOLERANCE, NetworkBeaconProcessor};
+use crate::service::NetworkMessage;
 use crate::sync::BatchProcessResult;
 use crate::sync::manager::CustodyBatchProcessResult;
 use crate::sync::{
@@ -13,6 +14,7 @@ use beacon_chain::data_availability_checker::{
 };
 use beacon_chain::fetch_blobs::PartialHeaderOrBid;
 use beacon_chain::historical_data_columns::HistoricalDataColumnError;
+use beacon_chain::inclusion_list_verification::InclusionListSource;
 use beacon_chain::payload_envelope_verification::EnvelopeSource;
 use beacon_chain::{
     AvailabilityProcessingStatus, BeaconChainTypes, BlockError, ChainSegmentResult,
@@ -25,6 +27,7 @@ use beacon_processor::{
 use beacon_processor::{Work, WorkEvent};
 use lighthouse_network::PeerAction;
 use lighthouse_network::PeerId;
+use lighthouse_network::ReportSource;
 use lighthouse_network::service::api_types::CustodyBackfillBatchId;
 use logging::crit;
 use std::sync::Arc;
@@ -301,6 +304,48 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
             process_type,
             result: result.into(),
         });
+    }
+
+    /// Attempt to verify and import inclusion lists received via RPC.
+    #[instrument(
+        name = "lh_process_rpc_inclusion_lists",
+        parent = None,
+        level = "debug",
+        skip_all,
+        fields(%peer_id),
+    )]
+    pub async fn process_rpc_inclusion_lists(
+        self: Arc<NetworkBeaconProcessor<T>>,
+        peer_id: PeerId,
+        inclusion_lists: Vec<Arc<types::SignedInclusionList>>,
+    ) {
+        debug!(
+            count = inclusion_lists.len(),
+            "Processing RPC inclusion lists"
+        );
+
+        for inclusion_list in inclusion_lists {
+            let slot = inclusion_list.message.slot;
+            let validator_index = inclusion_list.message.validator_index;
+            match self.chain.verify_inclusion_list_for_gossip(
+                Arc::unwrap_or_clone(inclusion_list),
+                InclusionListSource::Rpc,
+            ) {
+                Ok(verified_inclusion_list) => {
+                    let outcome = self.chain.import_inclusion_list(verified_inclusion_list);
+                    debug!(%slot, %validator_index, ?outcome, "Imported RPC inclusion list");
+                }
+                Err(e) if e.penalize_peer() => {
+                    self.send_network_message(NetworkMessage::ReportPeer {
+                        peer_id,
+                        action: PeerAction::LowToleranceError,
+                        source: ReportSource::SyncService,
+                        msg: "invalid_rpc_inclusion_list",
+                    });
+                }
+                Err(_) => {}
+            }
+        }
     }
 
     /// Attempt to verify and import an execution payload envelope received via RPC.

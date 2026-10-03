@@ -12,7 +12,9 @@ use beacon_chain::data_column_verification::{
 use beacon_chain::execution_proof_verification::Error as ExecutionProofError;
 use beacon_chain::fetch_blobs::PartialHeaderOrBid;
 use beacon_chain::inclusion_list_store::InsertOutcome;
-use beacon_chain::inclusion_list_verification::InclusionListVerificationError;
+use beacon_chain::inclusion_list_verification::{
+    InclusionListSource, InclusionListVerificationError,
+};
 use beacon_chain::partial_data_column_assembler::UpdatedPartials;
 use beacon_chain::payload_bid_verification::PayloadBidError;
 use beacon_chain::payload_envelope_verification::{
@@ -4368,7 +4370,9 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
         peer_id: PeerId,
         inclusion_list: Box<SignedInclusionList>,
     ) {
-        let verification_result = self.chain.verify_inclusion_list_for_gossip(*inclusion_list);
+        let verification_result = self
+            .chain
+            .verify_inclusion_list_for_gossip(*inclusion_list, InclusionListSource::Gossip);
 
         match verification_result {
             Ok(verified_inclusion_list) => {

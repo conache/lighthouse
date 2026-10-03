@@ -1,7 +1,7 @@
 use crate::canonical_head::CanonicalHead;
 use crate::inclusion_list_store::{InclusionListStore, InsertOutcome};
 use crate::inclusion_list_verification::{
-    InclusionListVerificationError, verify_inclusion_list_transactions_bounds,
+    InclusionListSource, InclusionListVerificationError, verify_inclusion_list_transactions_bounds,
 };
 use crate::shuffling_cache::{ShufflingCache, with_cached_shuffling};
 use crate::validator_pubkey_cache::ValidatorPubkeyCache;
@@ -15,6 +15,7 @@ use tracing::debug;
 use types::{ChainSpec, EthSpec, Hash256, SignedInclusionList, Slot};
 
 pub struct GossipVerificationContext<'a, T: BeaconChainTypes> {
+    pub source: InclusionListSource,
     pub canonical_head: &'a CanonicalHead<T>,
     pub inclusion_list_store: &'a RwLock<InclusionListStore<T::EthSpec>>,
     pub shuffling_cache: &'a RwLock<ShufflingCache<T::EthSpec>>,
@@ -43,21 +44,28 @@ impl GossipVerifiedInclusionList {
         let validator_index = inclusion_list.validator_index;
         let dependent_root = inclusion_list.dependent_root;
 
-        // [IGNORE] This is the first or second valid message from this validator.
-        if ctx
-            .inclusion_list_store
-            .read()
-            .seen_twice(slot, dependent_root, validator_index)
-        {
-            return Err(InclusionListVerificationError::AlreadySeenTwice {
-                validator_index,
-                slot,
-                dependent_root,
-            });
-        }
+        match ctx.source {
+            InclusionListSource::Gossip => {
+                // [IGNORE] This is the first or second valid message from this validator.
+                if ctx
+                    .inclusion_list_store
+                    .read()
+                    .seen_twice(slot, dependent_root, validator_index)
+                {
+                    return Err(InclusionListVerificationError::AlreadySeenTwice {
+                        validator_index,
+                        slot,
+                        dependent_root,
+                    });
+                }
 
-        // [IGNORE] `slot` is within the `MAXIMUM_GOSSIP_CLOCK_DISPARITY` allowance.
-        verify_propagation_slot_range(ctx.slot_clock, slot, ctx.spec)?;
+                // [IGNORE] `slot` is within the `MAXIMUM_GOSSIP_CLOCK_DISPARITY` allowance.
+                verify_propagation_slot_range(ctx.slot_clock, slot, ctx.spec)?;
+            }
+            InclusionListSource::Rpc => {
+                verify_retention_slot_range(ctx.slot_clock, slot, ctx.spec)?
+            }
+        }
 
         // [IGNORE] The size of the inclusion list transactions is non-zero.
         let transactions_size: u64 = inclusion_list
@@ -200,9 +208,44 @@ fn verify_propagation_slot_range<S: SlotClock>(
     Ok(())
 }
 
+/// Verify that the `slot` is within the range of slots the inclusion list store retains,
+/// with reference to the current slot of the clock.
+///
+/// Accounts for `MIN_SLOTS_FOR_INCLUSION_LISTS_REQUESTS`.
+fn verify_retention_slot_range<S: SlotClock>(
+    slot_clock: &S,
+    message_slot: Slot,
+    spec: &ChainSpec,
+) -> Result<(), InclusionListVerificationError> {
+    let current_slot = slot_clock
+        .now()
+        .ok_or(InclusionListVerificationError::UnableToReadSlot)?;
+    if message_slot > current_slot {
+        return Err(InclusionListVerificationError::FutureSlot {
+            message_slot,
+            latest_permissible_slot: current_slot,
+        });
+    }
+
+    let earliest_permissible_slot =
+        current_slot.saturating_sub(spec.min_slots_for_inclusion_lists_requests);
+    if message_slot < earliest_permissible_slot {
+        return Err(InclusionListVerificationError::PastSlot {
+            message_slot,
+            earliest_permissible_slot,
+        });
+    }
+
+    Ok(())
+}
+
 impl<T: BeaconChainTypes> BeaconChain<T> {
-    pub fn inclusion_list_gossip_verification_context(&self) -> GossipVerificationContext<'_, T> {
+    pub fn inclusion_list_gossip_verification_context(
+        &self,
+        source: InclusionListSource,
+    ) -> GossipVerificationContext<'_, T> {
         GossipVerificationContext {
+            source,
             canonical_head: &self.canonical_head,
             inclusion_list_store: &self.inclusion_list_store,
             shuffling_cache: &self.shuffling_cache,
@@ -218,16 +261,18 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     pub fn verify_inclusion_list_for_gossip(
         &self,
         signed_inclusion_list: SignedInclusionList,
+        source: InclusionListSource,
     ) -> Result<GossipVerifiedInclusionList, InclusionListVerificationError> {
         let slot = signed_inclusion_list.message.slot;
         let validator_index = signed_inclusion_list.message.validator_index;
 
-        let ctx = self.inclusion_list_gossip_verification_context();
+        let ctx = self.inclusion_list_gossip_verification_context(source);
         match GossipVerifiedInclusionList::new(signed_inclusion_list, &ctx) {
             Ok(verified) => {
                 debug!(
                     %slot,
                     %validator_index,
+                    ?source,
                     is_timely = verified.is_timely,
                     "Successfully verified gossip inclusion list"
                 );
@@ -241,6 +286,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                     error = e.to_string(),
                     %slot,
                     %validator_index,
+                    ?source,
                     "Rejected gossip inclusion list"
                 );
                 Err(e)
