@@ -870,12 +870,17 @@ impl TestRig {
             }
 
             (RequestType::InclusionListsByIndices(req), AppRequestId::Sync(req_id)) => {
+                // Serve one list per validator; a validator can hold several committee positions.
+                let mut served_validators = HashSet::new();
                 let mut inclusion_lists = req
                     .indices
                     .iter()
                     .enumerate()
                     .filter(|(_, requested)| *requested)
                     .filter_map(|(position, _)| self.network_inclusion_lists.get(position).cloned())
+                    .filter(|inclusion_list| {
+                        served_validators.insert(inclusion_list.message.validator_index)
+                    })
                     .collect::<Vec<_>>();
 
                 // Return lists for another slot N times
