@@ -12,7 +12,7 @@ use crate::{
     WhenSlotSkipped,
     inclusion_list_store::InsertOutcome,
     inclusion_list_verification::{
-        InclusionListVerificationError,
+        InclusionListSource, InclusionListVerificationError,
         gossip_verified_inclusion_list::{GossipVerificationContext, GossipVerifiedInclusionList},
     },
     test_utils::{BeaconChainHarness, EphemeralHarnessType, fork_name_from_env, test_spec},
@@ -62,7 +62,7 @@ impl TestContext {
     fn gossip_ctx(&self) -> GossipVerificationContext<'_, T> {
         self.harness
             .chain
-            .inclusion_list_gossip_verification_context()
+            .inclusion_list_gossip_verification_context(InclusionListSource::Gossip)
     }
 
     fn current_slot(&self) -> Slot {

@@ -16,6 +16,13 @@ use types::{BeaconStateError, ChainSpec, Hash256, ProgressiveTransactions, Slot}
 
 pub mod gossip_verified_inclusion_list;
 
+/// The path through which an inclusion list reached this node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, AsRefStr)]
+pub enum InclusionListSource {
+    Gossip,
+    Rpc,
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -67,6 +74,32 @@ pub enum InclusionListVerificationError {
     BeaconChainError(Arc<BeaconChainError>),
     /// Some Beacon State error
     BeaconStateError(BeaconStateError),
+}
+
+impl InclusionListVerificationError {
+    /// Whether the peer that sent the inclusion list should be penalized.
+    pub fn penalize_peer(&self) -> bool {
+        // This match statement should never have a default case so that we are always forced to
+        // consider whether or not to penalize a peer when we add a new error condition.
+        match self {
+            // The list may be valid but is not useful to this node, or the node cannot tell.
+            InclusionListVerificationError::AlreadySeenTwice { .. }
+            | InclusionListVerificationError::FutureSlot { .. }
+            | InclusionListVerificationError::PastSlot { .. }
+            | InclusionListVerificationError::EmptyTransactions
+            | InclusionListVerificationError::DependentRootUnknown { .. }
+            | InclusionListVerificationError::InvalidDependentRoot { .. }
+            | InclusionListVerificationError::UnableToReadSlot
+            | InclusionListVerificationError::BeaconChainError(_)
+            | InclusionListVerificationError::BeaconStateError(_) => false,
+            // The list is invalid and an honest peer would not have sent it.
+            InclusionListVerificationError::InvalidTransactions(_)
+            | InclusionListVerificationError::DependentRootTooRecent { .. }
+            | InclusionListVerificationError::NotInCommittee { .. }
+            | InclusionListVerificationError::UnknownValidatorIndex(_)
+            | InclusionListVerificationError::InvalidSignature => true,
+        }
+    }
 }
 
 impl std::fmt::Display for InclusionListVerificationError {
