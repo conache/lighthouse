@@ -207,7 +207,6 @@ impl BeaconProcessorQueueLengths {
             rpc_custody_column_queue: 64,
             // Bounded by `PARENT_DEPTH_TOLERANCE`; one envelope per Gloas block.
             rpc_envelope_queue: 1024,
-            // One request per slot, each returning at most the inclusion list committee size.
             rpc_inclusion_lists_queue: 64,
             column_reconstruction_queue: 1,
             chain_segment_queue: 64,

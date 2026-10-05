@@ -343,6 +343,8 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                         msg: "invalid_rpc_inclusion_list",
                     });
                 }
+                // The list is not useful to this node or could not be verified.
+                // The rejection is logged by the verifier, and the peer is not at fault.
                 Err(_) => {}
             }
         }

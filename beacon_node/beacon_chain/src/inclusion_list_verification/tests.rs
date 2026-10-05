@@ -413,6 +413,13 @@ fn rpc_list_within_retention_window() {
     let slot = ctx.current_slot();
     let signed = ctx.valid_inclusion_list(slot, ctx.genesis_block_root, vec![vec![0xaa]]);
 
+    // A list for a slot the clock hasn't reached yet is rejected, the same as on gossip.
+    let future = ctx.valid_inclusion_list(slot + 1, ctx.genesis_block_root, vec![vec![0xaa]]);
+    assert!(matches!(
+        GossipVerifiedInclusionList::new(future, &ctx.rpc_ctx()),
+        Err(InclusionListVerificationError::FutureSlot { .. })
+    ));
+
     let spec = &ctx.harness.spec;
     let last_retained_slot = slot + spec.min_slots_for_inclusion_lists_requests;
     let first_unretained_slot = last_retained_slot + 1;
