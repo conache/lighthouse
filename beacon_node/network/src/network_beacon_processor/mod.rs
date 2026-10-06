@@ -601,6 +601,22 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
         })
     }
 
+    /// Create a new `Work` event for inclusion lists fetched via RPC.
+    pub fn send_rpc_inclusion_lists(
+        self: &Arc<Self>,
+        peer_id: PeerId,
+        inclusion_lists: Vec<Arc<SignedInclusionList>>,
+    ) -> Result<(), Error<T::EthSpec>> {
+        let s = self.clone();
+        self.try_send(BeaconWorkEvent {
+            drop_during_sync: false,
+            work: Work::RpcInclusionLists(Box::pin(async move {
+                s.process_rpc_inclusion_lists(peer_id, inclusion_lists)
+                    .await;
+            })),
+        })
+    }
+
     /// Create a new `Work` event for some custody columns. `process_rpc_custody_columns` reports
     /// the result back to sync.
     pub fn send_rpc_custody_columns(

@@ -26,7 +26,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, error, trace, warn};
 use types::{
     BlobSidecar, DataColumnSidecar, EthSpec, ForkContext, PartialDataColumn, SignedBeaconBlock,
-    SignedExecutionPayloadEnvelope,
+    SignedExecutionPayloadEnvelope, SignedInclusionList,
 };
 
 /// Handles messages from the network and routes them to the appropriate service to be handled.
@@ -364,13 +364,17 @@ impl<T: BeaconChainTypes> Router<T> {
             Response::PayloadEnvelopesByRange(envelope) => {
                 self.on_payload_envelopes_by_range_response(peer_id, app_request_id, envelope);
             }
+            Response::InclusionListsByIndices(inclusion_list) => {
+                self.on_inclusion_lists_by_indices_response(
+                    peer_id,
+                    app_request_id,
+                    inclusion_list,
+                );
+            }
             // Lighthouse currently only serves BlocksByHead and does not issue it as a client,
             // so receiving a response is unexpected. Drop it without crashing.
             Response::BlocksByHead(_) => {
                 debug!("BlocksByHead response received but not requested by lighthouse");
-            }
-            Response::InclusionListsByIndices(_) => {
-                debug!("InclusionListsByIndices response received but not requested by lighthouse");
             }
             // Light client responses should not be received
             Response::LightClientBootstrap(_)
@@ -862,6 +866,29 @@ impl<T: BeaconChainTypes> Router<T> {
             if self.logger_debounce.elapsed() {
                 error!(error = %e, work_type, "Unable to send message to the beacon processor")
             }
+        }
+    }
+
+    /// Handle an `InclusionListsByIndices` response from the peer.
+    pub fn on_inclusion_lists_by_indices_response(
+        &mut self,
+        peer_id: PeerId,
+        app_request_id: AppRequestId,
+        inclusion_list: Option<Arc<SignedInclusionList>>,
+    ) {
+        trace!(
+            %peer_id,
+            "Received InclusionListsByIndices Response"
+        );
+
+        if let AppRequestId::Sync(sync_request_id) = app_request_id {
+            self.send_to_sync(SyncMessage::RpcInclusionList {
+                peer_id,
+                sync_request_id,
+                inclusion_list,
+            });
+        } else {
+            crit!("All inclusion lists by indices responses should belong to sync");
         }
     }
 }
