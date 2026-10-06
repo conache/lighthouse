@@ -41,8 +41,9 @@ impl TestRig {
             vec![inclusion_list.clone(); E::inclusion_list_committee_size()];
     }
 
-    /// Requests the first `positions` committee positions of the current slot from a single peer.
-    fn request_inclusion_lists(&mut self, positions: usize) {
+    /// Requests the lists of the first `position_count` committee positions of the current slot
+    /// from a single peer.
+    fn request_inclusion_lists(&mut self, position_count: usize) {
         self.new_connected_peer();
         let chain = &self.harness.chain;
         let slot = chain.slot().unwrap();
@@ -55,7 +56,7 @@ impl TestRig {
             requested: committee
                 .iter()
                 .enumerate()
-                .take(positions)
+                .take(position_count)
                 .map(|(position, validator_index)| (position, *validator_index))
                 .collect(),
         };

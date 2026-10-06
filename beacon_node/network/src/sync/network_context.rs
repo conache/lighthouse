@@ -1303,8 +1303,8 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         self.inclusion_lists_by_indices_requests.insert(
             id,
             peer_id,
-            // false = do not enforce that every requested list is returned. A peer may hold fewer
-            // inclusion lists than requested.
+            // do not enforce that every requested list is returned, since a peer may hold fewer
+            // inclusion lists than requested
             false,
             InclusionListsByIndicesRequestItems::new(request),
             request_span,
