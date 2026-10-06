@@ -1,5 +1,5 @@
 use crate::execution::{ExecutionPayloadBidGloas, ExecutionPayloadBidHeze, ExecutionPayloadBidRef};
-use crate::{Epoch, EthSpec, ForkName, ForkVersionDecode, Slot};
+use crate::{ChainSpec, Epoch, EthSpec, ForkName, ForkVersionDecode, InconsistentFork, Slot};
 use bls::Signature;
 use context_deserialize::{ContextDeserialize, context_deserialize};
 use educe::Educe;
@@ -50,6 +50,10 @@ impl<E: EthSpec> SignedExecutionPayloadBid<E> {
             Self::Gloas(inner) => ExecutionPayloadBidRef::Gloas(&inner.message),
             Self::Heze(inner) => ExecutionPayloadBidRef::Heze(&inner.message),
         }
+    }
+
+    pub fn fork_name(&self, spec: &ChainSpec) -> Result<ForkName, InconsistentFork> {
+        self.message().fork_name(spec)
     }
 
     pub fn slot(&self) -> crate::Slot {
@@ -164,15 +168,15 @@ impl<'de, E: EthSpec> ContextDeserialize<'de, ForkName> for SignedExecutionPaylo
 #[cfg(test)]
 mod gloas_tests {
     use super::*;
-    use crate::MainnetEthSpec;
+    use crate::Spec;
 
-    ssz_and_tree_hash_tests!(SignedExecutionPayloadBidGloas<MainnetEthSpec>);
+    ssz_and_tree_hash_tests!(SignedExecutionPayloadBidGloas<Spec>);
 }
 
 #[cfg(test)]
 mod heze_tests {
     use super::*;
-    use crate::MainnetEthSpec;
+    use crate::Spec;
 
-    ssz_and_tree_hash_tests!(SignedExecutionPayloadBidHeze<MainnetEthSpec>);
+    ssz_and_tree_hash_tests!(SignedExecutionPayloadBidHeze<Spec>);
 }

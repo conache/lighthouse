@@ -14,8 +14,8 @@ use store::{HotColdDB, StoreConfig, StoreOp};
 use types::{
     Address, BuilderExitRequest, ChainSpec, Checkpoint, Domain, Epoch, EthSpec, ExecutionBlockHash,
     ExecutionPayloadBid, ExecutionPayloadBidGloas, ExecutionPayloadBidHeze, ExecutionPayloadBidRef,
-    ExecutionPayloadEnvelope, ExecutionPayloadHeader, ExecutionPayloadHeaderFulu, Hash256,
-    InclusionList, InclusionListCommittee, MinimalEthSpec, ProgressiveTransactions,
+    ExecutionPayloadEnvelope, ExecutionPayloadHeader, ExecutionPayloadHeaderFulu, ForkName,
+    Hash256, InclusionList, InclusionListCommittee, MinimalEthSpec, ProgressiveTransactions,
     ProposerPreferences, RelativeEpoch, SignedBeaconBlock, SignedExecutionPayloadBid,
     SignedExecutionPayloadBidGloas, SignedExecutionPayloadBidHeze, SignedExecutionPayloadEnvelope,
     SignedInclusionList, SignedProposerPreferences, SignedRoot, Slot,
@@ -651,6 +651,28 @@ fn invalid_bid_slot() {
         result,
         Err(PayloadBidError::InvalidBidSlot { .. })
     ));
+}
+
+#[test]
+fn inconsistent_fork() {
+    // A Heze bid is only inconsistent with the slot's fork before Heze.
+    if fork_name_from_env() != Some(ForkName::Gloas) {
+        return;
+    }
+    let ctx = TestContext::new();
+    let gossip = ctx.gossip_ctx();
+
+    let bid = Arc::new(SignedExecutionPayloadBid::Heze(
+        SignedExecutionPayloadBidHeze {
+            message: ExecutionPayloadBidHeze {
+                slot: Slot::new(1),
+                ..ExecutionPayloadBidHeze::default()
+            },
+            signature: Signature::empty(),
+        },
+    ));
+    let result = GossipVerifiedPayloadBid::new(bid, &gossip);
+    assert!(matches!(result, Err(PayloadBidError::InconsistentFork(_))));
 }
 
 #[test]
