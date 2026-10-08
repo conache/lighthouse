@@ -54,6 +54,11 @@ pub fn verify_direct_bid<E: EthSpec>(
 ) -> Result<(), PayloadBidError> {
     let bid = signed_bid.message();
 
+    // Ensure the bid is the correct structure for the fork at `bid.slot()`.
+    signed_bid
+        .fork_name(spec)
+        .map_err(PayloadBidError::InconsistentFork)?;
+
     // The bid must be for exactly the slot being produced.
     if bid.slot() != proposal_slot {
         return Err(PayloadBidError::InvalidBidSlot {
@@ -134,8 +139,9 @@ mod tests {
     use super::*;
     use bls::Signature;
     use types::{
-        Address, ExecutionPayloadBidGloas, ExecutionPayloadBidHeze, MinimalEthSpec,
-        ProposerPreferences, SignedExecutionPayloadBidGloas, SignedExecutionPayloadBidHeze,
+        Address, Epoch, ExecutionPayloadBidGloas, ExecutionPayloadBidHeze, ForkName,
+        MinimalEthSpec, ProposerPreferences, SignedExecutionPayloadBidGloas,
+        SignedExecutionPayloadBidHeze,
     };
 
     type E = MinimalEthSpec;
@@ -144,7 +150,7 @@ mod tests {
     const EXECUTED_ANCESTOR_GAS_LIMIT: u64 = 30_000_000;
 
     fn state_and_spec() -> (BeaconState<E>, ChainSpec) {
-        let spec = E::default_spec();
+        let spec = ForkName::Gloas.make_genesis_spec(E::default_spec());
         let state = BeaconState::new(0, <_>::default(), &spec);
         (state, spec)
     }
@@ -428,7 +434,8 @@ mod tests {
 
     #[test]
     fn rejects_inclusion_list_bits_not_covering_local_view() {
-        let (state, spec) = state_and_spec();
+        let (state, mut spec) = state_and_spec();
+        spec.heze_fork_epoch = Some(Epoch::new(0));
         // The node holds lists from committee positions 0, 1 and 2; the bid only claims a subset of it
         let bid = signed_heze_bid(inclusion_list_bits(&[0, 1]));
         let result = verify_direct_bid(
@@ -451,7 +458,8 @@ mod tests {
 
     #[test]
     fn inclusion_list_bits_covering_local_view_pass_inclusivity_check() {
-        let (state, spec) = state_and_spec();
+        let (state, mut spec) = state_and_spec();
+        spec.heze_fork_epoch = Some(Epoch::new(0));
         // The bid claims a superset of the node's view
         let bid = signed_heze_bid(inclusion_list_bits(&[0, 1, 2, 5]));
         let result = verify_direct_bid(
@@ -470,5 +478,58 @@ mod tests {
             matches!(result, Err(PayloadBidError::InvalidBuilder { .. })),
             "expected to fail after the inclusion list check, got {result:?}"
         );
+    }
+
+    #[test]
+    fn rejects_gloas_bid_at_heze_slot() {
+        let (state, mut spec) = state_and_spec();
+        let heze_fork_epoch = Epoch::new(1);
+        spec.heze_fork_epoch = Some(heze_fork_epoch);
+        let heze_slot = heze_fork_epoch.start_slot(E::slots_per_epoch());
+        let bid = signed_bid(
+            heze_slot,
+            ExecutionBlockHash::zero(),
+            Hash256::ZERO,
+            Hash256::ZERO,
+        );
+        let result = verify_direct_bid(
+            &bid,
+            heze_slot,
+            ExecutionBlockHash::zero(),
+            Hash256::ZERO,
+            EXECUTED_ANCESTOR_GAS_LIMIT,
+            &BuilderPubkeys::default(),
+            &preferences(),
+            &inclusion_list_bits(&[]),
+            &state,
+            &spec,
+        );
+        assert!(matches!(result, Err(PayloadBidError::InconsistentFork(_))));
+    }
+
+    #[test]
+    fn rejects_heze_bid_at_gloas_slot() {
+        let (state, mut spec) = state_and_spec();
+        spec.heze_fork_epoch = Some(Epoch::new(1));
+        let bid = SignedExecutionPayloadBid::Heze(SignedExecutionPayloadBidHeze {
+            message: ExecutionPayloadBidHeze {
+                slot: Slot::new(1),
+                ..ExecutionPayloadBidHeze::default()
+            },
+            signature: Signature::empty(),
+        });
+        let result = verify_direct_bid(
+            &bid,
+            Slot::new(1),
+            ExecutionBlockHash::zero(),
+            Hash256::ZERO,
+            EXECUTED_ANCESTOR_GAS_LIMIT,
+            &BuilderPubkeys::default(),
+            &preferences(),
+            &inclusion_list_bits(&[]),
+            &state,
+            &spec,
+        );
+        assert!(matches!(result, Err(PayloadBidError::InconsistentFork(_))));
     }
 }
