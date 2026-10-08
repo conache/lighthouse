@@ -2,10 +2,12 @@ use beacon_chain::{
     observed_operations::ObservationOutcome,
     test_utils::{BeaconChainHarness, test_spec},
 };
+use bls::Signature;
 use std::sync::Arc;
 use types::{
-    Address, Epoch, ExecutionRequests, ExecutionRequestsGloas, Hash256, MinimalEthSpec, Slot,
-    WithdrawalRequest,
+    Address, Epoch, ExecutionRequests, ExecutionRequestsGloas, Hash256, InclusionList,
+    MinimalEthSpec, ProgressiveTransactions, SignedExecutionPayloadBidRef, SignedInclusionList,
+    Slot, WithdrawalRequest, consts::gloas::BUILDER_INDEX_SELF_BUILD,
 };
 
 type E = MinimalEthSpec;
@@ -129,4 +131,80 @@ async fn gloas_block_production_filters_exits_with_parent_partial_withdrawals() 
         state.get_validator(1).unwrap().exit_epoch,
         spec.far_future_epoch
     );
+}
+
+/// The self-built bid claims every inclusion list the node holds for the slot before the proposal,
+/// both timely and untimely.
+#[tokio::test]
+async fn heze_self_build_bid_claims_held_inclusion_lists() {
+    let spec = test_spec::<E>();
+    if !spec.fork_name_at_slot::<E>(Slot::new(0)).heze_enabled() {
+        return;
+    }
+
+    let harness = BeaconChainHarness::builder(E::default())
+        .spec(Arc::new(spec))
+        .deterministic_keypairs(64)
+        .fresh_ephemeral_store()
+        .mock_execution_layer()
+        .build();
+
+    let inclusion_list_slot = Slot::new(0);
+    let parent_root = harness.head_block_root();
+    let (committee, dependent_root) = harness
+        .chain
+        .inclusion_list_committee(parent_root, inclusion_list_slot)
+        .unwrap();
+
+    let timely_submitter = committee[0];
+    let late_submitter = *committee
+        .iter()
+        .find(|index| **index != timely_submitter)
+        .unwrap();
+
+    let mut store = harness.chain.inclusion_list_store.write();
+    for (validator_index, is_timely) in [(timely_submitter, true), (late_submitter, false)] {
+        store.process_inclusion_list(
+            SignedInclusionList {
+                message: InclusionList {
+                    slot: inclusion_list_slot,
+                    validator_index,
+                    dependent_root,
+                    transactions: ProgressiveTransactions::default(),
+                },
+                signature: Signature::empty(),
+            },
+            is_timely,
+        );
+    }
+    drop(store);
+
+    harness.advance_slot();
+    let state = harness.get_current_state();
+    let (block_contents, _, _) = harness.make_block_with_envelope(state, Slot::new(1)).await;
+
+    let SignedExecutionPayloadBidRef::Heze(signed_bid) = block_contents
+        .0
+        .message()
+        .body()
+        .signed_execution_payload_bid()
+        .unwrap()
+    else {
+        panic!("a Heze block should carry a Heze bid");
+    };
+    assert_eq!(signed_bid.message.builder_index, BUILDER_INDEX_SELF_BUILD);
+
+    // A validator holding several committee positions has all of them set
+    for (position, validator_index) in committee.iter().enumerate() {
+        let expected = *validator_index == timely_submitter || *validator_index == late_submitter;
+        assert_eq!(
+            signed_bid
+                .message
+                .inclusion_list_bits
+                .get(position)
+                .unwrap(),
+            expected,
+            "unexpected bit at committee position {position}"
+        );
+    }
 }
