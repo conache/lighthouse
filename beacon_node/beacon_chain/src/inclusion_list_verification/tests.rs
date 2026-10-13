@@ -4,8 +4,8 @@ use std::time::Duration;
 use slot_clock::{SlotClock, TestingSlotClock};
 use ssz_types::ProgressiveVariableList;
 use types::{
-    Domain, Epoch, EthSpec, Hash256, InclusionList, MinimalEthSpec, ProgressiveTransactions,
-    SignedInclusionList, SignedRoot, Slot,
+    Domain, Epoch, EthSpec, Hash256, InclusionList, ProgressiveTransactions, SignedInclusionList,
+    SignedRoot, Slot, Spec,
 };
 
 use crate::{
@@ -18,7 +18,7 @@ use crate::{
     test_utils::{BeaconChainHarness, EphemeralHarnessType, fork_name_from_env, test_spec},
 };
 
-type E = MinimalEthSpec;
+type E = Spec;
 type T = EphemeralHarnessType<E>;
 
 const NUM_VALIDATORS: usize = 64;
@@ -30,8 +30,12 @@ struct TestContext {
 
 impl TestContext {
     fn new() -> Self {
+        Self::new_with_heze_fork_epoch(Epoch::new(0))
+    }
+
+    fn new_with_heze_fork_epoch(heze_fork_epoch: Epoch) -> Self {
         let mut spec = test_spec::<E>();
-        spec.heze_fork_epoch = Some(Epoch::new(0));
+        spec.heze_fork_epoch = Some(heze_fork_epoch);
         let spec = Arc::new(spec);
         let slot_clock = TestingSlotClock::new(
             Slot::new(0),
@@ -69,6 +73,10 @@ impl TestContext {
         self.harness
             .chain
             .inclusion_list_gossip_verification_context(InclusionListSource::Rpc)
+    }
+
+    fn seen_timestamp(&self) -> Duration {
+        self.harness.chain.slot_clock.now_duration().unwrap()
     }
 
     fn current_slot(&self) -> Slot {
@@ -145,8 +153,9 @@ fn valid_inclusion_list() {
     let slot = ctx.current_slot();
 
     let signed = ctx.valid_inclusion_list(slot, ctx.genesis_block_root, vec![vec![0xaa]]);
-    let verified = GossipVerifiedInclusionList::new(signed, &ctx.gossip_ctx())
-        .expect("should verify inclusion list");
+    let verified =
+        GossipVerifiedInclusionList::new(signed, ctx.seen_timestamp(), &ctx.gossip_ctx())
+            .expect("should verify inclusion list");
     assert!(verified.is_timely);
     assert_eq!(
         ctx.harness.chain.import_inclusion_list(verified),
@@ -167,9 +176,27 @@ fn inclusion_list_after_deadline_is_not_timely() {
     );
 
     let signed = ctx.valid_inclusion_list(slot, ctx.genesis_block_root, vec![vec![0xaa]]);
-    let verified = GossipVerifiedInclusionList::new(signed, &ctx.gossip_ctx())
-        .expect("should verify inclusion list");
+    let verified =
+        GossipVerifiedInclusionList::new(signed, ctx.seen_timestamp(), &ctx.gossip_ctx())
+            .expect("should verify inclusion list");
     assert!(!verified.is_timely);
+}
+
+#[test]
+fn inclusion_list_seen_before_deadline_is_timely() {
+    if !fork_name_from_env().is_some_and(|f| f.gloas_enabled()) {
+        return;
+    }
+    let ctx = TestContext::new();
+    let slot = ctx.current_slot();
+    let slot_clock = &ctx.harness.chain.slot_clock;
+    let seen_timestamp = slot_clock.start_of(slot).unwrap();
+    slot_clock.set_current_time(seen_timestamp + ctx.harness.spec.get_inclusion_list_due());
+
+    let signed = ctx.valid_inclusion_list(slot, ctx.genesis_block_root, vec![vec![0xaa]]);
+    let verified = GossipVerifiedInclusionList::new(signed, seen_timestamp, &ctx.gossip_ctx())
+        .expect("should verify inclusion list");
+    assert!(verified.is_timely);
 }
 
 #[test]
@@ -183,13 +210,14 @@ fn already_seen_twice() {
     // An equivocating second list still counts as a valid message.
     for tx in [0xaa, 0xbb] {
         let signed = ctx.valid_inclusion_list(slot, ctx.genesis_block_root, vec![vec![tx]]);
-        let verified = GossipVerifiedInclusionList::new(signed, &ctx.gossip_ctx())
-            .expect("should verify inclusion list");
+        let verified =
+            GossipVerifiedInclusionList::new(signed, ctx.seen_timestamp(), &ctx.gossip_ctx())
+                .expect("should verify inclusion list");
         ctx.harness.chain.import_inclusion_list(verified);
     }
 
     let signed = ctx.valid_inclusion_list(slot, ctx.genesis_block_root, vec![vec![0xcc]]);
-    let result = GossipVerifiedInclusionList::new(signed, &ctx.gossip_ctx());
+    let result = GossipVerifiedInclusionList::new(signed, ctx.seen_timestamp(), &ctx.gossip_ctx());
     assert!(matches!(
         result,
         Err(InclusionListVerificationError::AlreadySeenTwice { .. })
@@ -205,7 +233,7 @@ fn future_slot() {
     let slot = ctx.current_slot() + 1;
 
     let signed = ctx.valid_inclusion_list(slot, ctx.genesis_block_root, vec![vec![0xaa]]);
-    let result = GossipVerifiedInclusionList::new(signed, &ctx.gossip_ctx());
+    let result = GossipVerifiedInclusionList::new(signed, ctx.seen_timestamp(), &ctx.gossip_ctx());
     assert!(matches!(
         result,
         Err(InclusionListVerificationError::FutureSlot { .. })
@@ -221,11 +249,70 @@ fn past_slot() {
     ctx.harness.chain.slot_clock.set_slot(5);
 
     let signed = ctx.valid_inclusion_list(Slot::new(0), ctx.genesis_block_root, vec![vec![0xaa]]);
-    let result = GossipVerifiedInclusionList::new(signed, &ctx.gossip_ctx());
+    let result = GossipVerifiedInclusionList::new(signed, ctx.seen_timestamp(), &ctx.gossip_ctx());
     assert!(matches!(
         result,
         Err(InclusionListVerificationError::PastSlot { .. })
     ));
+}
+
+#[test]
+fn slot_within_clock_disparity() {
+    if !fork_name_from_env().is_some_and(|f| f.gloas_enabled()) {
+        return;
+    }
+    let ctx = TestContext::new();
+    let slot = ctx.current_slot();
+    let slot_clock = &ctx.harness.chain.slot_clock;
+    let next_slot_start = slot_clock.start_of(slot + 1).unwrap();
+
+    slot_clock.set_current_time(next_slot_start - Duration::from_millis(5));
+    let signed = ctx.valid_inclusion_list(slot + 1, ctx.genesis_block_root, vec![vec![0xaa]]);
+    let verified =
+        GossipVerifiedInclusionList::new(signed, ctx.seen_timestamp(), &ctx.gossip_ctx())
+            .expect("should verify inclusion list for the next slot");
+    assert!(!verified.is_timely);
+
+    slot_clock.set_current_time(next_slot_start + Duration::from_millis(5));
+    let signed = ctx.valid_inclusion_list(slot, ctx.genesis_block_root, vec![vec![0xaa]]);
+    let verified =
+        GossipVerifiedInclusionList::new(signed, ctx.seen_timestamp(), &ctx.gossip_ctx())
+            .expect("should verify inclusion list for the previous slot");
+    assert!(!verified.is_timely);
+}
+
+#[test]
+fn rejected_inclusion_list_is_not_counted() {
+    if !fork_name_from_env().is_some_and(|f| f.gloas_enabled()) {
+        return;
+    }
+    let ctx = TestContext::new();
+    let slot = ctx.current_slot();
+
+    let validator_index = ctx.committee(slot)[0];
+    let other_signer = (validator_index + 1) % NUM_VALIDATORS as u64;
+    let signed = ctx.sign_inclusion_list(
+        make_inclusion_list(
+            slot,
+            validator_index,
+            ctx.genesis_block_root,
+            vec![vec![0xaa]],
+        ),
+        other_signer,
+    );
+    let result = GossipVerifiedInclusionList::new(signed, ctx.seen_timestamp(), &ctx.gossip_ctx());
+    assert!(matches!(
+        result,
+        Err(InclusionListVerificationError::InvalidSignature)
+    ));
+
+    for tx in [0xaa, 0xbb] {
+        let signed = ctx.valid_inclusion_list(slot, ctx.genesis_block_root, vec![vec![tx]]);
+        let verified =
+            GossipVerifiedInclusionList::new(signed, ctx.seen_timestamp(), &ctx.gossip_ctx())
+                .expect("should verify inclusion list");
+        ctx.harness.chain.import_inclusion_list(verified);
+    }
 }
 
 #[test]
@@ -239,7 +326,8 @@ fn empty_transactions() {
     // A list of only empty transactions also has a total size of zero, so it is ignored.
     for txs in [vec![], vec![vec![]]] {
         let signed = ctx.valid_inclusion_list(slot, ctx.genesis_block_root, txs);
-        let result = GossipVerifiedInclusionList::new(signed, &ctx.gossip_ctx());
+        let result =
+            GossipVerifiedInclusionList::new(signed, ctx.seen_timestamp(), &ctx.gossip_ctx());
         assert!(matches!(
             result,
             Err(InclusionListVerificationError::EmptyTransactions)
@@ -258,7 +346,8 @@ fn invalid_transactions() {
 
     for txs in [vec![vec![0xaa; max_size + 1]], vec![vec![0xaa], vec![]]] {
         let signed = ctx.valid_inclusion_list(slot, ctx.genesis_block_root, txs);
-        let result = GossipVerifiedInclusionList::new(signed, &ctx.gossip_ctx());
+        let result =
+            GossipVerifiedInclusionList::new(signed, ctx.seen_timestamp(), &ctx.gossip_ctx());
         assert!(matches!(
             result,
             Err(InclusionListVerificationError::InvalidTransactions(_))
@@ -276,7 +365,7 @@ fn transactions_at_size_limit() {
     let max_size = ctx.harness.spec.max_transactions_bytes_per_inclusion_list as usize;
 
     let signed = ctx.valid_inclusion_list(slot, ctx.genesis_block_root, vec![vec![0xaa; max_size]]);
-    let result = GossipVerifiedInclusionList::new(signed, &ctx.gossip_ctx());
+    let result = GossipVerifiedInclusionList::new(signed, ctx.seen_timestamp(), &ctx.gossip_ctx());
     assert!(result.is_ok(), "expected Ok, got: {:?}", result);
 }
 
@@ -289,7 +378,7 @@ fn unknown_dependent_root() {
     let slot = ctx.current_slot();
 
     let signed = ctx.valid_inclusion_list(slot, Hash256::repeat_byte(0xff), vec![vec![0xaa]]);
-    let result = GossipVerifiedInclusionList::new(signed, &ctx.gossip_ctx());
+    let result = GossipVerifiedInclusionList::new(signed, ctx.seen_timestamp(), &ctx.gossip_ctx());
     assert!(matches!(
         result,
         Err(InclusionListVerificationError::DependentRootUnknown { .. })
@@ -312,7 +401,7 @@ fn not_in_committee() {
         make_inclusion_list(slot, non_member, ctx.genesis_block_root, vec![vec![0xaa]]),
         non_member,
     );
-    let result = GossipVerifiedInclusionList::new(signed, &ctx.gossip_ctx());
+    let result = GossipVerifiedInclusionList::new(signed, ctx.seen_timestamp(), &ctx.gossip_ctx());
     assert!(matches!(
         result,
         Err(InclusionListVerificationError::NotInCommittee { .. })
@@ -338,7 +427,7 @@ fn invalid_signature() {
         ),
         other_signer,
     );
-    let result = GossipVerifiedInclusionList::new(signed, &ctx.gossip_ctx());
+    let result = GossipVerifiedInclusionList::new(signed, ctx.seen_timestamp(), &ctx.gossip_ctx());
     assert!(matches!(
         result,
         Err(InclusionListVerificationError::InvalidSignature)
@@ -364,25 +453,146 @@ async fn dependent_root_must_be_the_shuffling_dependent_block() {
     };
 
     let valid = ctx.valid_inclusion_list(slot, block_root_at(dependent_slot), vec![vec![0xaa]]);
-    let result = GossipVerifiedInclusionList::new(valid, &ctx.gossip_ctx());
+    let result = GossipVerifiedInclusionList::new(valid, ctx.seen_timestamp(), &ctx.gossip_ctx());
     assert!(result.is_ok(), "expected Ok, got: {:?}", result);
 
     let too_recent =
         ctx.valid_inclusion_list(slot, block_root_at(dependent_slot + 1), vec![vec![0xaa]]);
-    let result = GossipVerifiedInclusionList::new(too_recent, &ctx.gossip_ctx());
+    let result =
+        GossipVerifiedInclusionList::new(too_recent, ctx.seen_timestamp(), &ctx.gossip_ctx());
     assert!(matches!(
         result,
         Err(InclusionListVerificationError::DependentRootTooRecent { .. })
     ));
 
-    // A later block in epoch 0 exists, so this one can't be the dependent block.
+    // Its only child sits at the dependent slot, so this one can't be the dependent block.
     let superseded =
-        ctx.valid_inclusion_list(slot, block_root_at(dependent_slot - 2), vec![vec![0xaa]]);
-    let result = GossipVerifiedInclusionList::new(superseded, &ctx.gossip_ctx());
+        ctx.valid_inclusion_list(slot, block_root_at(dependent_slot - 1), vec![vec![0xaa]]);
+    let result =
+        GossipVerifiedInclusionList::new(superseded, ctx.seen_timestamp(), &ctx.gossip_ctx());
     assert!(matches!(
         result,
         Err(InclusionListVerificationError::InvalidDependentRoot { .. })
     ));
+}
+
+/// A list built on a side chain is checked against that chain's committee.
+#[tokio::test]
+async fn side_chain_inclusion_list_uses_side_chain_committee() {
+    if !fork_name_from_env().is_some_and(|f| f.gloas_enabled()) {
+        return;
+    }
+    let ctx = TestContext::new();
+    let harness = &ctx.harness;
+    let fork_slot = Slot::new(E::slots_per_epoch());
+    let slot = Slot::new(4 * E::slots_per_epoch());
+
+    harness.extend_to_slot(fork_slot).await;
+    let fork_state = harness.chain.head_snapshot().beacon_state.clone();
+
+    // The side chain skips a slot, so its RANDAO mixes and committees differ. Only the
+    // canonical chain is attested to, so it stays the head without finalizing past the fork.
+    let side_slots = ((fork_slot + 2).as_u64()..=slot.as_u64())
+        .map(Slot::new)
+        .collect();
+    let canonical_slots = ((fork_slot + 1).as_u64()..=slot.as_u64())
+        .map(Slot::new)
+        .collect();
+    let results = harness
+        .add_blocks_on_multiple_chains(vec![
+            (fork_state.clone(), side_slots, vec![]),
+            (
+                fork_state,
+                canonical_slots,
+                (0..NUM_VALIDATORS / 2).collect(),
+            ),
+        ])
+        .await;
+    let side_head_root: Hash256 = results[0].2.into();
+    let canonical_head_root: Hash256 = results[1].2.into();
+    assert_eq!(harness.head_block_root(), canonical_head_root);
+    harness.chain.slot_clock.set_slot(slot.as_u64());
+
+    let committee_and_dependent_root = |head_root| {
+        let (committee, dependent_root) = harness
+            .chain
+            .inclusion_list_committee(head_root, slot)
+            .expect("should compute committee");
+        (committee.to_vec(), dependent_root)
+    };
+    let (side_committee, side_dependent_root) = committee_and_dependent_root(side_head_root);
+    let (canonical_committee, _) = committee_and_dependent_root(canonical_head_root);
+    assert_ne!(side_committee, canonical_committee);
+
+    let side_member = *side_committee
+        .iter()
+        .find(|index| !canonical_committee.contains(index))
+        .expect("should find a member of the side chain committee only");
+    let signed = ctx.sign_inclusion_list(
+        make_inclusion_list(slot, side_member, side_dependent_root, vec![vec![0xaa]]),
+        side_member,
+    );
+    let result = GossipVerifiedInclusionList::new(signed, ctx.seen_timestamp(), &ctx.gossip_ctx());
+    assert!(result.is_ok(), "expected Ok, got: {:?}", result);
+
+    let canonical_member = *canonical_committee
+        .iter()
+        .find(|index| !side_committee.contains(index))
+        .expect("should find a member of the canonical committee only");
+    let signed = ctx.sign_inclusion_list(
+        make_inclusion_list(
+            slot,
+            canonical_member,
+            side_dependent_root,
+            vec![vec![0xaa]],
+        ),
+        canonical_member,
+    );
+    let result = GossipVerifiedInclusionList::new(signed, ctx.seen_timestamp(), &ctx.gossip_ctx());
+    assert!(matches!(
+        result,
+        Err(InclusionListVerificationError::NotInCommittee { .. })
+    ));
+}
+
+/// In the first Heze epoch the dependent block is a Gloas block, and the list is signed with the
+/// Heze fork version.
+#[tokio::test]
+async fn inclusion_list_in_first_heze_epoch() {
+    if !fork_name_from_env().is_some_and(|f| f.gloas_enabled()) {
+        return;
+    }
+    let heze_fork_epoch = Epoch::new(2);
+    let ctx = TestContext::new_with_heze_fork_epoch(heze_fork_epoch);
+    let slot = heze_fork_epoch.start_slot(E::slots_per_epoch());
+    ctx.harness.extend_to_slot(slot).await;
+
+    let (committee, dependent_root) = ctx
+        .harness
+        .chain
+        .inclusion_list_committee(ctx.harness.head_block_root(), slot)
+        .expect("should compute committee");
+    let dependent_slot = ctx
+        .harness
+        .chain
+        .get_blinded_block(&dependent_root)
+        .unwrap()
+        .unwrap()
+        .slot();
+    assert!(
+        !ctx.harness
+            .spec
+            .fork_name_at_slot::<E>(dependent_slot)
+            .heze_enabled()
+    );
+
+    let validator_index = committee[0];
+    let signed = ctx.sign_inclusion_list(
+        make_inclusion_list(slot, validator_index, dependent_root, vec![vec![0xaa]]),
+        validator_index,
+    );
+    let result = GossipVerifiedInclusionList::new(signed, ctx.seen_timestamp(), &ctx.gossip_ctx());
+    assert!(result.is_ok(), "expected Ok, got: {:?}", result);
 }
 
 #[test]
@@ -395,13 +605,14 @@ fn rpc_list_already_seen_twice_is_verified() {
 
     for tx in [0xaa, 0xbb] {
         let signed = ctx.valid_inclusion_list(slot, ctx.genesis_block_root, vec![vec![tx]]);
-        let verified = GossipVerifiedInclusionList::new(signed, &ctx.gossip_ctx())
-            .expect("should verify inclusion list");
+        let verified =
+            GossipVerifiedInclusionList::new(signed, ctx.seen_timestamp(), &ctx.gossip_ctx())
+                .expect("should verify inclusion list");
         ctx.harness.chain.import_inclusion_list(verified);
     }
 
     let signed = ctx.valid_inclusion_list(slot, ctx.genesis_block_root, vec![vec![0xcc]]);
-    assert!(GossipVerifiedInclusionList::new(signed, &ctx.rpc_ctx()).is_ok());
+    assert!(GossipVerifiedInclusionList::new(signed, ctx.seen_timestamp(), &ctx.rpc_ctx()).is_ok());
 }
 
 #[test]
@@ -416,7 +627,7 @@ fn rpc_list_within_retention_window() {
     // A list for a slot the clock hasn't reached yet is rejected, the same as on gossip.
     let future = ctx.valid_inclusion_list(slot + 1, ctx.genesis_block_root, vec![vec![0xaa]]);
     assert!(matches!(
-        GossipVerifiedInclusionList::new(future, &ctx.rpc_ctx()),
+        GossipVerifiedInclusionList::new(future, ctx.seen_timestamp(), &ctx.rpc_ctx()),
         Err(InclusionListVerificationError::FutureSlot { .. })
     ));
 
@@ -431,17 +642,20 @@ fn rpc_list_within_retention_window() {
         .slot_clock
         .set_current_time(last_retained_slot_start + spec.maximum_gossip_clock_disparity());
     assert!(matches!(
-        GossipVerifiedInclusionList::new(signed.clone(), &ctx.gossip_ctx()),
+        GossipVerifiedInclusionList::new(signed.clone(), ctx.seen_timestamp(), &ctx.gossip_ctx()),
         Err(InclusionListVerificationError::PastSlot { .. })
     ));
-    assert!(GossipVerifiedInclusionList::new(signed.clone(), &ctx.rpc_ctx()).is_ok());
+    assert!(
+        GossipVerifiedInclusionList::new(signed.clone(), ctx.seen_timestamp(), &ctx.rpc_ctx())
+            .is_ok()
+    );
 
     ctx.harness
         .chain
         .slot_clock
         .set_slot(first_unretained_slot.as_u64());
     assert!(matches!(
-        GossipVerifiedInclusionList::new(signed, &ctx.rpc_ctx()),
+        GossipVerifiedInclusionList::new(signed, ctx.seen_timestamp(), &ctx.rpc_ctx()),
         Err(InclusionListVerificationError::PastSlot { .. })
     ));
 }

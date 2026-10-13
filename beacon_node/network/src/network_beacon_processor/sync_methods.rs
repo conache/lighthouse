@@ -30,6 +30,7 @@ use lighthouse_network::PeerId;
 use lighthouse_network::ReportSource;
 use lighthouse_network::service::api_types::CustodyBackfillBatchId;
 use logging::crit;
+use slot_clock::SlotClock;
 use std::sync::Arc;
 use tracing::{debug, debug_span, error, info, instrument, warn};
 use types::{BlockImportSource, DataColumnSidecarList, Epoch, ExecutionBlockHash, Hash256};
@@ -324,11 +325,13 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
             "Processing RPC inclusion lists"
         );
 
+        let seen_timestamp = self.chain.slot_clock.now_duration().unwrap_or_default();
         for inclusion_list in inclusion_lists {
             let slot = inclusion_list.message.slot;
             let validator_index = inclusion_list.message.validator_index;
             match self.chain.verify_inclusion_list_for_gossip(
                 Arc::unwrap_or_clone(inclusion_list),
+                seen_timestamp,
                 InclusionListSource::Rpc,
             ) {
                 Ok(verified_inclusion_list) => {
@@ -1081,6 +1084,11 @@ impl From<Result<AvailabilityProcessingStatus, BlockError>> for BlockProcessingR
                             None
                         }
                     }
+                    BlockError::DataColumnSlotMismatch { column_index, .. } => Some((
+                        PeerAction::MidToleranceError,
+                        WhichPeerToPenalize::CustodyPeerForColumn(*column_index),
+                        (&e).into(),
+                    )),
                     // Remaining invalid blocks: penalize the block peer. Listed explicitly so a
                     // new `BlockError` variant forces a compile error here.
                     BlockError::FutureSlot { .. }

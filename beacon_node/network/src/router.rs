@@ -603,6 +603,7 @@ impl<T: BeaconChainTypes> Router<T> {
                         message_id,
                         peer_id,
                         inclusion_list,
+                        seen_timestamp,
                     ),
                 )
             }
