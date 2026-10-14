@@ -407,6 +407,12 @@ pub fn process_epoch_single_pass<E: EthSpec>(
                 state
                     .get_balance_mut(validator_index)?
                     .safe_add_assign(deposit_data.amount)?;
+            } else if state.fork_name_unchecked().heze_enabled()
+                && deposit_data.withdrawal_credentials.as_slice().first()
+                    == Some(&spec.bls_withdrawal_prefix_byte)
+            {
+                // EIP-8365: never create new validators with BLS withdrawal credentials.
+                continue;
             } else if is_valid_deposit_signature(&deposit_data, spec).is_ok() {
                 // Apply the new deposit to the state
                 let validator_index = state.add_validator_to_registry(
