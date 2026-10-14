@@ -791,7 +791,8 @@ impl<E: EthSpec + TypeName> Handler for ForkChoiceComplianceHandler<E> {
     }
 
     fn disabled_forks(&self) -> Vec<ForkName> {
-        vec![]
+        // No Heze compliance vectors are published yet.
+        vec![ForkName::Heze]
     }
 }
 
@@ -1122,7 +1123,7 @@ impl<E: EthSpec + TypeName> Handler for GossipValidationHandler<E> {
     }
 
     fn disabled_forks(&self) -> Vec<ForkName> {
-        vec![ForkName::Gloas]
+        vec![ForkName::Gloas, ForkName::Heze]
     }
 }
 

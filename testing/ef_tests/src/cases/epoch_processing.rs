@@ -425,6 +425,10 @@ impl<E: EthSpec, T: EpochTransition<E>> Case for EpochProcessing<E, T> {
             return false;
         }
 
+        if fork_name.heze_enabled() && T::name() == "eth1_data_reset" {
+            return false;
+        }
+
         if !fork_name.gloas_enabled()
             && (T::name() == "builder_pending_payments"
                 || T::name() == "ptc_window"

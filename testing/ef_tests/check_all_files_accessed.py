@@ -50,15 +50,15 @@ excluded_paths = [
     "tests/.*/eip7732",
     "tests/.*/eip7805",
     # TODO(gloas): Add production-backed handlers for the new Gloas gossip test suites.
-    "tests/.*/gloas/networking/gossip_.*",
-    # Heze fork is not implemented
-    "tests/.*/heze/.*",
+    "tests/.*/(gloas|heze)/networking/gossip_.*",
+    # TODO(gloas): Heze light client merkle proofs are disabled with Gloas light client support.
+    "tests/.*/heze/light_client/single_merkle_proof/.*",
     # Ignore MatrixEntry SSZ tests for now.
     "tests/.*/.*/ssz_static/MatrixEntry/.*",
     # TODO: partial data column not implemented yet
     "tests/.*/.*/ssz_static/PartialDataColumn.*/.*",
     # TODO(gloas): Ignore Gloas light client stuff for now
-    "tests/.*/gloas/ssz_static/LightClient.*/.*",
+    "tests/.*/(gloas|heze)/ssz_static/LightClient.*/.*",
     # TODO(gloas): the light client update ranking handler disables Gloas until Gloas light client
     # updates are supported.
     "tests/.*/gloas/light_client/update_ranking",
@@ -78,12 +78,12 @@ excluded_paths = [
     "tests/.*/.*/networking/gossip_beacon_block/.*/gossip_beacon_block__reject_parent_consensus_failed_execution_not_verified/.*",
     "tests/.*/.*/networking/gossip_beacon_block/.*/gossip_beacon_block__reject_parent_failed_validation/.*",
     # Gossip validation tests target the latest stable fork.
-    "tests/.*/(phase0|altair|bellatrix|capella|deneb|electra|gloas)/networking/gossip_beacon_attestation/.*",
-    "tests/.*/(phase0|altair|bellatrix|capella|deneb|electra|gloas)/networking/gossip_beacon_aggregate_and_proof/.*",
-    "tests/.*/(phase0|altair|bellatrix|capella|deneb|electra|gloas)/networking/gossip_voluntary_exit/.*",
-    "tests/.*/(phase0|altair|bellatrix|capella|deneb|electra|gloas)/networking/gossip_bls_to_execution_change/.*",
-    "tests/.*/(phase0|altair|bellatrix|capella|deneb|electra|gloas)/networking/gossip_sync_committee_message/.*",
-    "tests/.*/(phase0|altair|bellatrix|capella|deneb|electra|gloas)/networking/gossip_sync_committee_contribution_and_proof/.*",
+    "tests/.*/(phase0|altair|bellatrix|capella|deneb|electra|gloas|heze)/networking/gossip_beacon_attestation/.*",
+    "tests/.*/(phase0|altair|bellatrix|capella|deneb|electra|gloas|heze)/networking/gossip_beacon_aggregate_and_proof/.*",
+    "tests/.*/(phase0|altair|bellatrix|capella|deneb|electra|gloas|heze)/networking/gossip_voluntary_exit/.*",
+    "tests/.*/(phase0|altair|bellatrix|capella|deneb|electra|gloas|heze)/networking/gossip_bls_to_execution_change/.*",
+    "tests/.*/(phase0|altair|bellatrix|capella|deneb|electra|gloas|heze)/networking/gossip_sync_committee_message/.*",
+    "tests/.*/(phase0|altair|bellatrix|capella|deneb|electra|gloas|heze)/networking/gossip_sync_committee_contribution_and_proof/.*",
     # The production-backed harness cannot construct these synthetic fixture histories.
     # Keep these patterns synchronized with GossipValidation::has_known_harness_limitation.
     "tests/.*/fulu/networking/gossip_(beacon_attestation|beacon_aggregate_and_proof)/.*/gossip_.*__accepts_.*/.*",

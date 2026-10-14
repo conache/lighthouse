@@ -558,6 +558,18 @@ mod ssz_static {
         SszStaticHandler::<ExecutionRequestsElectra<Spec>, Spec>::electra_only().run();
         SszStaticHandler::<ExecutionRequestsElectra<Spec>, Spec>::fulu_only().run();
         SszStaticHandler::<ExecutionRequestsGloas<Spec>, Spec>::gloas_only().run();
+        SszStaticHandler::<ExecutionRequestsGloas<Spec>, Spec>::heze_only().run();
+    }
+
+    // Heze and later
+    #[test]
+    fn inclusion_list() {
+        SszStaticHandler::<InclusionList, Spec>::heze_and_later().run();
+    }
+
+    #[test]
+    fn signed_inclusion_list() {
+        SszStaticHandler::<SignedInclusionList, Spec>::heze_and_later().run();
     }
 
     // Gloas and later

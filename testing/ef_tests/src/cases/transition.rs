@@ -130,6 +130,7 @@ impl<E: EthSpec> Case for TransitionTest<E> {
         let mut state = self.pre.clone();
         let mut expected = self.post.clone();
         let spec = &self.spec;
+        state.build_caches(spec).unwrap();
         let mut processed_blocks = 0;
 
         let mut result: Result<_, String> = self
