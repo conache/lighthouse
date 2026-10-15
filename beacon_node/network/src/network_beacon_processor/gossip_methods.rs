@@ -12,7 +12,9 @@ use beacon_chain::data_column_verification::{
 use beacon_chain::execution_proof_verification::{Error as ExecutionProofError, ProofSource};
 use beacon_chain::fetch_blobs::PartialHeaderOrBid;
 use beacon_chain::inclusion_list_store::InsertOutcome;
-use beacon_chain::inclusion_list_verification::InclusionListVerificationError;
+use beacon_chain::inclusion_list_verification::{
+    InclusionListSource, InclusionListVerificationError,
+};
 use beacon_chain::partial_data_column_assembler::UpdatedPartials;
 use beacon_chain::payload_bid_verification::PayloadBidError;
 use beacon_chain::payload_envelope_verification::{
@@ -4372,9 +4374,11 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
         inclusion_list: Box<SignedInclusionList>,
         seen_timestamp: Duration,
     ) {
-        let verification_result = self
-            .chain
-            .verify_inclusion_list_for_gossip(*inclusion_list, seen_timestamp);
+        let verification_result = self.chain.verify_inclusion_list_for_gossip(
+            *inclusion_list,
+            seen_timestamp,
+            InclusionListSource::Gossip,
+        );
         if let Err(error) = &verification_result {
             metrics::register_inclusion_list_error(error);
         }

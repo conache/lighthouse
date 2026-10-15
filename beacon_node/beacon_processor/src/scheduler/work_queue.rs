@@ -123,6 +123,7 @@ pub struct BeaconProcessorQueueLengths {
     rpc_blob_queue: usize,
     rpc_custody_column_queue: usize,
     rpc_envelope_queue: usize,
+    rpc_inclusion_lists_queue: usize,
     column_reconstruction_queue: usize,
     chain_segment_queue: usize,
     backfill_chain_segment: usize,
@@ -206,6 +207,7 @@ impl BeaconProcessorQueueLengths {
             rpc_custody_column_queue: 64,
             // Bounded by `PARENT_DEPTH_TOLERANCE`; one envelope per Gloas block.
             rpc_envelope_queue: 1024,
+            rpc_inclusion_lists_queue: 64,
             column_reconstruction_queue: 1,
             chain_segment_queue: 64,
             backfill_chain_segment: 64,
@@ -269,6 +271,7 @@ pub struct WorkQueues<E: EthSpec> {
     pub rpc_blob_queue: FifoQueue<Work<E>>,
     pub rpc_custody_column_queue: FifoQueue<Work<E>>,
     pub rpc_envelope_queue: FifoQueue<Work<E>>,
+    pub rpc_inclusion_lists_queue: FifoQueue<Work<E>>,
     pub column_reconstruction_queue: LifoQueue<Work<E>>,
     pub chain_segment_queue: FifoQueue<Work<E>>,
     pub backfill_chain_segment: FifoQueue<Work<E>>,
@@ -345,6 +348,7 @@ impl<E: EthSpec> WorkQueues<E> {
         let rpc_blob_queue = FifoQueue::new(queue_lengths.rpc_blob_queue);
         let rpc_custody_column_queue = FifoQueue::new(queue_lengths.rpc_custody_column_queue);
         let rpc_envelope_queue = FifoQueue::new(queue_lengths.rpc_envelope_queue);
+        let rpc_inclusion_lists_queue = FifoQueue::new(queue_lengths.rpc_inclusion_lists_queue);
         let column_reconstruction_queue = LifoQueue::new(queue_lengths.column_reconstruction_queue);
         let chain_segment_queue = FifoQueue::new(queue_lengths.chain_segment_queue);
         let backfill_chain_segment = FifoQueue::new(queue_lengths.backfill_chain_segment);
@@ -418,6 +422,7 @@ impl<E: EthSpec> WorkQueues<E> {
             rpc_blob_queue,
             rpc_custody_column_queue,
             rpc_envelope_queue,
+            rpc_inclusion_lists_queue,
             chain_segment_queue,
             column_reconstruction_queue,
             backfill_chain_segment,

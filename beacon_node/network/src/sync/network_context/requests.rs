@@ -12,6 +12,10 @@ pub use blocks_by_range::BlocksByRangeRequestItems;
 pub use blocks_by_root::{BlocksByRootRequestItems, BlocksByRootSingleRequest};
 pub use data_columns_by_range::DataColumnsByRangeRequestItems;
 pub use data_columns_by_root::{DataColumnsByRootRequestItems, DataColumnsByRootRequestParams};
+pub use inclusion_lists_by_indices::{
+    InclusionListCommitteePositions, InclusionListsByIndicesRequestItems,
+    InclusionListsByIndicesRequestParams,
+};
 pub use payload_envelopes_by_range::PayloadEnvelopesByRangeRequestItems;
 pub use payload_envelopes_by_root::{
     PayloadEnvelopesByRootRequestItems, PayloadEnvelopesByRootSingleRequest,
@@ -26,6 +30,7 @@ mod blocks_by_range;
 mod blocks_by_root;
 mod data_columns_by_range;
 mod data_columns_by_root;
+mod inclusion_lists_by_indices;
 mod payload_envelopes_by_range;
 mod payload_envelopes_by_root;
 
@@ -34,6 +39,7 @@ pub enum LookupVerifyError {
     NotEnoughResponsesReturned { actual: usize },
     TooManyResponses,
     UnrequestedBlockRoot(Hash256),
+    UnrequestedDependentRoot(Hash256),
     UnrequestedIndex(u64),
     UnrequestedSlot(Slot),
     InvalidInclusionProof,

@@ -1,5 +1,6 @@
 use arbitrary::Arbitrary;
 use beacon_chain::data_column_verification::GossipVerifiedDataColumn;
+use beacon_chain::inclusion_list_verification::InclusionListSource;
 use beacon_chain::payload_envelope_verification::EnvelopeSource;
 use beacon_chain::test_utils::{
     BeaconChainHarness, fork_name_from_env, generate_data_column_sidecars_from_block, test_spec,
@@ -554,6 +555,7 @@ async fn inclusion_list_event_on_import() {
             .verify_inclusion_list_for_gossip(
                 signed.clone(),
                 harness.chain.slot_clock.now_duration().unwrap(),
+                InclusionListSource::Gossip,
             )
             .expect("verification should succeed");
         harness.chain.import_inclusion_list(verified);
