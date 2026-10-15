@@ -156,7 +156,7 @@ pub enum CustodyRequester {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AppRequestId {
     Sync(SyncRequestId),
-    Router,
+    Status,
     Internal,
 }
 

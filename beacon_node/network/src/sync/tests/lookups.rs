@@ -39,8 +39,8 @@ use tokio::sync::mpsc;
 use tracing::info;
 use types::{
     BlobSidecar, BlockImportSource, ColumnIndex, DataColumnSidecar, DataColumnSubnetId,
-    ForkContext, ForkName, Hash256, MinimalEthSpec as E, SignedBeaconBlock,
-    SignedExecutionPayloadEnvelope, SignedInclusionList, Slot,
+    ForkContext, ForkName, Hash256, SignedBeaconBlock, SignedExecutionPayloadEnvelope,
+    SignedInclusionList, Slot, Spec as E,
 };
 
 /// Extract the Gloas payload envelope (if any) carried by a stored `RangeSyncBlock`.
@@ -265,7 +265,7 @@ impl TestRig {
         );
 
         // Gloas genesis needs enough validators for proposer lookahead.
-        let harness = BeaconChainHarness::<EphemeralHarnessType<E>>::builder(E)
+        let harness = BeaconChainHarness::<EphemeralHarnessType<E>>::builder(E::default())
             .spec(spec.clone())
             .deterministic_keypairs(TEST_RIG_VALIDATOR_COUNT)
             .fresh_ephemeral_store()
@@ -899,7 +899,7 @@ impl TestRig {
                 self.send_rpc_inclusion_lists_response(req_id, peer_id, &inclusion_lists);
             }
 
-            (RequestType::Status(_req), AppRequestId::Router) => {
+            (RequestType::Status(_req), AppRequestId::Status) => {
                 // Ignore Status requests for now
             }
 
@@ -1083,7 +1083,7 @@ impl TestRig {
 
     fn get_external_harness_with_genesis(&mut self) -> BeaconChainHarness<EphemeralHarnessType<E>> {
         // Initialise a new beacon chain
-        let external_harness = BeaconChainHarness::<EphemeralHarnessType<E>>::builder(E)
+        let external_harness = BeaconChainHarness::<EphemeralHarnessType<E>>::builder(E::default())
             .spec(self.harness.spec.clone())
             .deterministic_keypairs(TEST_RIG_VALIDATOR_COUNT)
             .fresh_ephemeral_store()
